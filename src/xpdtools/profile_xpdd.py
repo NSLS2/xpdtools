@@ -32,7 +32,7 @@ if not XPDTOOLS_RUNNING_IN_CI:
     RE = RunEngine(
         RedisJSONDict(
             open_redis_client("xf28id2-xpdd-redis1.nsls2.bnl.gov", redis_ssl=True), ""
-        ) # type: ignore (TODO: Loosen type of RE.md to Mapping from dict)
+        )  # type: ignore (TODO: Loosen type of RE.md to Mapping from dict)
     )
 else:
     RE = RunEngine(
@@ -47,7 +47,7 @@ RE.md["facility"] = "NSLS-II"
 RE.md["group"] = "XPD-D"
 RE.md["beamline_id"] = "28-ID-2"
 
-RE.waiting_hook = ProgressBarManager()  # type: ignore
+RE.waiting_hook = ProgressBarManager()  # type: ignore[assignment]
 
 if not XPDTOOLS_RUNNING_IN_CI:
     tiled_writing_client = from_uri(
