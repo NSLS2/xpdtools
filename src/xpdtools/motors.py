@@ -1,11 +1,22 @@
+"""Additional motor classes and helper functions for XPD beamline at NSLS-II."""
+
 import asyncio
 
-from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
+from ophyd_async.core import (
+    DeviceMock,
+    callback_on_mock_put,
+    default_mock_class,
+    derived_signal_r,
+    set_mock_put_proceeds,
+    set_mock_value,
+)
 from ophyd_async.epics.core import epics_signal_r
-from ophyd_async.core import DeviceMock, callback_on_mock_put, default_mock_class, derived_signal_r, set_mock_put_proceeds, set_mock_value
+from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
 
 
-def get_encoder_value_from_angle(angle: float, encoder_resolution: float, encoder_pos_at_zero: int) -> int:
+def get_encoder_value_from_angle(
+    angle: float, encoder_resolution: float, encoder_pos_at_zero: int
+) -> int:
     """Calculate the encoder value from an angle.
 
     Parameters
@@ -65,18 +76,21 @@ class VelocityRespectingMotorMock(DeviceMock[AsyncEpicsMotor]):
 class RotationMotor(AsyncEpicsMotor):
     """A motor that can be used for rotation scans.
 
-    This class is a subclass of the AsyncEpicsMotor class and is used to represent 
-    a motor that can be used for rotation scans. It has additional attributes and methods that are specific to rotation scans.
+    This class is a subclass of the AsyncEpicsMotor class and is used to represent
+    a motor that can be used for rotation scans. It has additional attributes and
+    methods that are specific to rotation scans.
     """
 
     def __init__(self, prefix: str, encoder_pos_at_zero: int = 0, name: str = ""):
         super().__init__(prefix, name=name)
         self.encoder_resolution = epics_signal_r(float, prefix + ".ERES")
         self.encoder_counts_per_rev = derived_signal_r(
-            self.get_encoder_counts_per_rev, derived_units="counts", derived_precision=0, encoder_resolution=self.encoder_resolution
+            self.get_encoder_counts_per_rev,
+            derived_units="counts",
+            derived_precision=0,
+            encoder_resolution=self.encoder_resolution,
         )
         self.encoder_pos_at_zero = encoder_pos_at_zero
-
 
     def get_encoder_counts_per_rev(self, encoder_resolution: float) -> int:
         """Calculate the number of encoder counts per revolution.
@@ -91,9 +105,7 @@ class RotationMotor(AsyncEpicsMotor):
         int
             The number of encoder counts per revolution.
         """
-
         return int(360.0 * encoder_resolution)
-
 
     async def get_encoder_value_from_angle(self, angle: float) -> int:
         """Calculate the encoder value from an angle.
@@ -109,4 +121,6 @@ class RotationMotor(AsyncEpicsMotor):
             The encoder value corresponding to the given angle.
         """
         encoder_resolution = await self.encoder_resolution.get_value()
-        return get_encoder_value_from_angle(angle, encoder_resolution, self.encoder_pos_at_zero)
+        return get_encoder_value_from_angle(
+            angle, encoder_resolution, self.encoder_pos_at_zero
+        )

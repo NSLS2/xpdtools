@@ -1,14 +1,24 @@
-from .motors import RotationMotor, get_encoder_value_from_angle
-from .flyers import SingleAxisFlyscanType, SingleAxisFlyscanInfo, SingleAxisFlyscanController
-from ophyd_async.fastcs.panda import HDFPanda as PandABox
-from bluesky.protocols import Flyable, Collectable
-from ophyd_async.core import StandardDetector, TriggerInfo, FlyMotorInfo, DetectorTrigger, DEFAULT_TIMEOUT, StandardFlyer
-from ophyd_async.epics.adcore import ADBaseIO, AreaDetector
-from ophyd_async.fastcs.panda import PcompInfo, StaticPcompTriggerLogic, PandaPcompDirection
-
+"""Acquisition plans for XPD beamline at NSLS-II."""
 
 import bluesky.plan_stubs as bps
-import bluesky.plans as bp
+from ophyd_async.core import (
+    DetectorTrigger,
+    FlyMotorInfo,
+    StandardFlyer,
+    TriggerInfo,
+)
+from ophyd_async.epics.adcore import ADBaseIO, AreaDetector
+from ophyd_async.fastcs.panda import HDFPanda as PandABox
+from ophyd_async.fastcs.panda import (
+    PandaPcompDirection,
+)
+
+from .flyers import (
+    SingleAxisFlyscanController,
+    SingleAxisFlyscanInfo,
+    SingleAxisFlyscanType,
+)
+from .motors import RotationMotor, get_encoder_value_from_angle
 
 
 def single_axis_flyscan(
@@ -20,26 +30,25 @@ def single_axis_flyscan(
     stop: float = 180.0,
     stream_name: str = "tomo",
 ):
-    """Simple hardware triggered flyscan tomography
+    """Perform a single axis flyscan with the given detectors, PandABox, and motor.
 
     Parameters
     ----------
     detectors : list[AreaDetector[ADBaseIO]]
         list of area detectors to use in the scan
-    num_images : int
-        total number of camera images to collect during the scan
-    start_deg : float (optional)
-        starting point in degrees
-    stop_deg : float (optional)
-        stopping point in degrees
-    lead_angle : float (optional)
-        the angle in degrees to be used to move motor to -lead_angle before 'start_deg' and +lead_angle after 'stop_deg'
-    reset_speed : float
-        speed of the rotary motor during reset movements, in deg/s
-    use_shutter : bool
-        whether to use/check the shutter during the scan
+    panda : PandABox
+        PandABox to use for triggering the detectors and motor
+    motor : RotationMotor
+        RotationMotor to use for the scan
+    num_images : int, optional
+        Number of images to acquire, by default 1801
+    start : float, optional
+        Start motor position of the scan, by default 0.0
+    stop : float, optional
+        Stop motor position of the scan, by default 180.0
+    stream_name : str, optional
+        Name of the data stream, by default "tomo"
     """
-
     all_detectors = [*detectors, panda]
 
     # Construct ephemeral flyer for the single axis flyscan
@@ -48,7 +57,9 @@ def single_axis_flyscan(
 
     # Get the start position in encoder counts
     eres = yield from bps.rd(motor.encoder_resolution)
-    start_in_counts = get_encoder_value_from_angle(start, eres, motor.encoder_pos_at_zero)
+    start_in_counts = get_encoder_value_from_angle(
+        start, eres, motor.encoder_pos_at_zero
+    )
 
     # Get the currently configured exposure times
     exposure_times = []
@@ -67,12 +78,12 @@ def single_axis_flyscan(
     )
 
     single_axis_flyscan_info = SingleAxisFlyscanInfo(
-        pulse_width = 1,
-        pulse_step = 2,
-        start = start_in_counts,
-        scan_type = SingleAxisFlyscanType.POSITION_BASED,
-        num_pulses = num_images,
-        direction = PandaPcompDirection.POSITIVE,
+        pulse_width=1,
+        pulse_step=2,
+        start=start_in_counts,
+        scan_type=SingleAxisFlyscanType.POSITION_BASED,
+        num_pulses=num_images,
+        direction=PandaPcompDirection.POSITIVE,
     )
 
     rotation_motor_info = FlyMotorInfo(
@@ -80,7 +91,6 @@ def single_axis_flyscan(
         end_position=stop,
         time_for_move=max(exposure_times) * num_images,
     )
-
 
     _md = {
         "detectors": [det.name for det in detectors],
@@ -90,20 +100,21 @@ def single_axis_flyscan(
     }
     yield from bps.open_run(md=_md)
 
-
     # Stage All!
     yield from bps.stage_all(*all_detectors)
 
     yield from bps.prepare(motor, rotation_motor_info, group="prepare")
 
-    yield from bps.prepare(single_axis_panda_flyer, single_axis_flyscan_info, group="prepare")
+    yield from bps.prepare(
+        single_axis_panda_flyer, single_axis_flyscan_info, group="prepare"
+    )
 
     for det in detectors:
         yield from bps.prepare(det, det_trigger_info, group="prepare")
 
     yield from bps.prepare(panda, panda_trigger_info, group="prepare")
 
-    # TODO: Come up with a way to set a timeout automatically based on the 
+    # TODO: Come up with a way to set a timeout automatically based on the
     # motor move to start position time.
     yield from bps.wait(group="prepare")
 
@@ -111,7 +122,10 @@ def single_axis_flyscan(
 
     yield from bps.kickoff_all(*all_devices, wait=True)
     yield from bps.collect_while_completing(
-        all_devices, all_detectors, flush_period=max(1, max(exposure_times)), stream_name=stream_name
+        all_devices,
+        all_detectors,
+        flush_period=max(1, max(exposure_times)),
+        stream_name=stream_name,
     )
     yield from bps.unstage_all(*all_detectors)
 

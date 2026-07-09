@@ -1,22 +1,35 @@
+"""Pilatus4 detector interface for XPD beamline at NSLS-II."""
+
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Annotated as A
 
 from ophyd_async.core import (
     DetectorTriggerLogic,
     SignalDict,
-    StandardReadable,
-    SubsetEnum,
-    StrictEnum,
     SignalR,
     SignalRW,
-    derived_signal_r,
+    StandardReadable,
+    StrictEnum,
+    SubsetEnum,
+)
+from ophyd_async.core import (
     StandardReadableFormat as Format,
 )
-from typing import Annotated as A, Sequence
-from ophyd_async.epics.adcore import ADAcquireLogic, ADBaseIO, ADWriterFactory, AreaDetector, NDPluginBaseIO, prepare_exposures, trigger_info_from_num_images
+from ophyd_async.epics.adcore import (
+    ADAcquireLogic,
+    ADBaseIO,
+    ADWriterFactory,
+    AreaDetector,
+    NDPluginBaseIO,
+    prepare_exposures,
+    trigger_info_from_num_images,
+)
 from ophyd_async.epics.core import (
     PvSuffix,
 )
+
 
 class Pilatus4TriggerMode(StrictEnum):
     """Trigger modes for the Pilatus4 detector.
@@ -94,7 +107,6 @@ class SimplonStreamVersion(StrictEnum):
     STREAM2 = "Stream2"
 
 
-
 class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     """Pilatus4 driver interface.
 
@@ -107,7 +119,9 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     num_images_counter: A[SignalR[int], PvSuffix("NumImagesCounter_RBV")]
     num_exposures: A[SignalRW[int], PvSuffix.rbv("NumExposures")]
     acquire_time: A[SignalRW[float], PvSuffix.rbv("AcquireTime"), Format.CONFIG_SIGNAL]
-    acquire_period: A[SignalRW[float], PvSuffix.rbv("AcquirePeriod"), Format.CONFIG_SIGNAL]
+    acquire_period: A[
+        SignalRW[float], PvSuffix.rbv("AcquirePeriod"), Format.CONFIG_SIGNAL
+    ]
     temperature_actual: A[SignalR[float], PvSuffix("TemperatureActual")]
     max_size_x: A[SignalR[int], PvSuffix("MaxSizeX_RBV")]
     max_size_y: A[SignalR[int], PvSuffix("MaxSizeY_RBV")]
@@ -116,7 +130,9 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     manufacturer: A[SignalR[str], PvSuffix("Manufacturer_RBV"), Format.CONFIG_SIGNAL]
     model: A[SignalR[str], PvSuffix("Model_RBV"), Format.CONFIG_SIGNAL]
     serial_number: A[SignalR[str], PvSuffix("SerialNumber_RBV"), Format.CONFIG_SIGNAL]
-    firmware_version: A[SignalR[str], PvSuffix("FirmwareVersion_RBV"), Format.CONFIG_SIGNAL]
+    firmware_version: A[
+        SignalR[str], PvSuffix("FirmwareVersion_RBV"), Format.CONFIG_SIGNAL
+    ]
     sdk_version: A[SignalR[str], PvSuffix("SDKVersion_RBV"), Format.CONFIG_SIGNAL]
     driver_version: A[SignalR[str], PvSuffix("DriverVersion_RBV"), Format.CONFIG_SIGNAL]
 
@@ -124,8 +140,12 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     description: A[SignalR[str], PvSuffix("Description_RBV"), Format.CONFIG_SIGNAL]
     x_pixel_size: A[SignalR[float], PvSuffix("XPixelSize_RBV"), Format.CONFIG_SIGNAL]
     y_pixel_size: A[SignalR[float], PvSuffix("YPixelSize_RBV"), Format.CONFIG_SIGNAL]
-    sensor_material: A[SignalR[str], PvSuffix("SensorMaterial_RBV"), Format.CONFIG_SIGNAL]
-    sensor_thickness: A[SignalR[float], PvSuffix("SensorThickness_RBV"), Format.CONFIG_SIGNAL]
+    sensor_material: A[
+        SignalR[str], PvSuffix("SensorMaterial_RBV"), Format.CONFIG_SIGNAL
+    ]
+    sensor_thickness: A[
+        SignalR[float], PvSuffix("SensorThickness_RBV"), Format.CONFIG_SIGNAL
+    ]
     dead_time: A[SignalR[float], PvSuffix("DeadTime_RBV"), Format.CONFIG_SIGNAL]
 
     # Detector Status
@@ -135,7 +155,9 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     humid0: A[SignalR[float], PvSuffix("Humid0_RBV")]
 
     # Acquisition Setup
-    photon_energy: A[SignalRW[float], PvSuffix.rbv("PhotonEnergy"), Format.CONFIG_SIGNAL]
+    photon_energy: A[
+        SignalRW[float], PvSuffix.rbv("PhotonEnergy"), Format.CONFIG_SIGNAL
+    ]
 
     # Trigger Setup
     trigger: A[SignalRW[float], PvSuffix("Trigger")]
@@ -149,7 +171,9 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     countrate_corr_applied: A[SignalRW[bool], PvSuffix.rbv("CountrateCorrApplied")]
     pixel_mask_applied: A[SignalRW[bool], PvSuffix.rbv("PixelMaskApplied")]
     auto_summation: A[SignalRW[bool], PvSuffix.rbv("AutoSummation")]
-    compression_algo: A[SignalRW[Pilatus4CompressionAlgo], PvSuffix.rbv("CompressionAlgo")]
+    compression_algo: A[
+        SignalRW[Pilatus4CompressionAlgo], PvSuffix.rbv("CompressionAlgo")
+    ]
     data_source: A[SignalRW[Pilatus4DataSource], PvSuffix.rbv("DataSource")]
 
     # Acquisition Status
@@ -183,11 +207,17 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     omega_incr: A[SignalRW[float], PvSuffix.rbv("OmegaIncr"), Format.CONFIG_SIGNAL]
     phi_start: A[SignalRW[float], PvSuffix.rbv("PhiStart"), Format.CONFIG_SIGNAL]
     phi_incr: A[SignalRW[float], PvSuffix.rbv("PhiIncr"), Format.CONFIG_SIGNAL]
-    two_theta_start: A[SignalRW[float], PvSuffix.rbv("TwoThetaStart"), Format.CONFIG_SIGNAL]
-    two_theta_incr: A[SignalRW[float], PvSuffix.rbv("TwoThetaIncr"), Format.CONFIG_SIGNAL]
+    two_theta_start: A[
+        SignalRW[float], PvSuffix.rbv("TwoThetaStart"), Format.CONFIG_SIGNAL
+    ]
+    two_theta_incr: A[
+        SignalRW[float], PvSuffix.rbv("TwoThetaIncr"), Format.CONFIG_SIGNAL
+    ]
 
     # Minimum change allowed
-    wavelength_eps: A[SignalRW[float], PvSuffix.rbv("WavelengthEps"), Format.CONFIG_SIGNAL]
+    wavelength_eps: A[
+        SignalRW[float], PvSuffix.rbv("WavelengthEps"), Format.CONFIG_SIGNAL
+    ]
     energy_eps: A[SignalRW[float], PvSuffix.rbv("EnergyEps"), Format.CONFIG_SIGNAL]
 
     # FileWriter Interface
@@ -225,10 +255,15 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     signed_data: A[SignalRW[bool], PvSuffix.rbv("SignedData"), Format.CONFIG_SIGNAL]
 
     # Stream Interface
-    stream_version: A[SignalRW[SimplonStreamVersion], PvSuffix.rbv("StreamVersion"), Format.CONFIG_SIGNAL]
+    stream_version: A[
+        SignalRW[SimplonStreamVersion],
+        PvSuffix.rbv("StreamVersion"),
+        Format.CONFIG_SIGNAL,
+    ]
 
     # FileWriter Interface
     # fw_hdf5_format: A[SignalRW[EigerHDF5Format], PvSuffix.rbv("FWHDF5Format")]
+
 
 @dataclass
 class Pilatus4TriggerLogic(DetectorTriggerLogic):
@@ -248,7 +283,7 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
             self.driver.trigger_mode.set(Pilatus4TriggerMode.EXTERNAL_SERIES),
             self.driver.num_triggers.set(num),
             self.driver.acquire_time.set(livetime),
-            self.driver.num_images.set(1)
+            self.driver.num_images.set(1),
         ]
         await asyncio.gather(*coros)
 

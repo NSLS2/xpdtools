@@ -1,17 +1,34 @@
-from ophyd_async.core import ConfinedModel, FlyerController, StandardFlyer, wait_for_value
-from ophyd_async.fastcs.panda import CommonPandaBlocks, PandaPcompDirection
-from enum import StrEnum
+"""Flyer classes for XPD beamline at NSLS-II."""
+
 import asyncio
+from enum import StrEnum
+
+from ophyd_async.core import (
+    ConfinedModel,
+    FlyerController,
+    wait_for_value,
+)
+from ophyd_async.fastcs.panda import CommonPandaBlocks, PandaPcompDirection
 
 
 class SingleAxisFlyscanType(StrEnum):
+    """Single axis flyscan type.
+
+    Attributes
+    ----------
+    POSITION_BASED : str
+        Position based flyscan
+    TIME_BASED : str
+        Time based flyscan
+    """
+
     POSITION_BASED = "position_based"
     TIME_BASED = "time_based"
 
 
 class SingleAxisFlyscanInfo(ConfinedModel):
     """Information for a single axis flyscan.
-    
+
     Attributes
     ----------
     start : int
@@ -21,9 +38,9 @@ class SingleAxisFlyscanInfo(ConfinedModel):
     direction : PandaPcompDirection
         The direction of the flyscan, either positive or negative
     pulse_width : float | int
-        The width of each pulse, in encoder counts for position based scans, or in seconds for time based scans
+        The width of each pulse, in counts for position based scans, s for time based
     pulse_step : float | int
-        The step between pulses, in encoder counts for position based scans, or in seconds for time based scans
+        The step between pulses, in counts for position based scans, s for time based
     scan_type : SingleAxisFlyscanType
         The type of flyscan, either position based or time based
     """
@@ -69,7 +86,6 @@ class SingleAxisFlyscanController(FlyerController[SingleAxisFlyscanInfo]):
                 ]
             )
         await asyncio.gather(*coros)
-
 
     async def kickoff(self) -> None:
         await wait_for_value(self.panda.pcomp[1].active, True, timeout=1)
