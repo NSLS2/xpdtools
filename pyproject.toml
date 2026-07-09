@@ -33,7 +33,7 @@ dependencies = [
   "bluesky-tiled-plugins>=2.0.6",
   "ipython>=9.15.0",
   "nslsii>=0.11.9",
-  "ophyd-async[ca, pva]>=0.17a2",
+  "ophyd-async[ca,pva]>=0.17a2",
   "redis-json-dict>=0.2.2",
   "rich>=15.0.0",
   "tiled[client]>=0.2.12",
@@ -99,7 +99,7 @@ reportMissingImports = false  # Ignore missing stubs in imported modules
 addopts = """
     --tb=native -vv --strict-markers --doctest-modules
     --doctest-glob="*.rst" --doctest-glob="*.md"
-    --ignore=docs/examples --ignore=src/xpdtools/profile.py
+    --ignore=docs/examples --ignore=src/xpdtools/profiles
     """
 # https://iscinumpy.gitlab.io/post/bound-version-constraints/#watch-for-warnings
 filterwarnings = ["error"]
@@ -167,3 +167,4 @@ root_package = "xpdtools"
 
 [tool.uv.sources]
 ntnda-qt-viewer = { git = "https://github.com/jwlodek/ntnda-qt-viewer" }
+ophyd-async = { path = "../ophyd-async" }

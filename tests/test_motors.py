@@ -1,10 +1,10 @@
 import pytest
 
-from xpdtools.motors import get_encoder_value_from_angle
+from xpdtools.motors import get_encoder_value_from_pos
 
 
 @pytest.mark.parametrize(
-    "angle, encoder_resolution, encoder_pos_at_zero, expected",
+    "position, encoder_resolution, encoder_pos_at_zero, expected",
     [
         (0.0, 10.0, 1000, 1000),
         (90.0, 10.0, 1000, 1900),
@@ -13,10 +13,10 @@ from xpdtools.motors import get_encoder_value_from_angle
         (-90.0, 10.0, 1000, 100),
     ],
 )
-def test_get_encoder_value_from_angle(
-    angle, encoder_resolution, encoder_pos_at_zero, expected
+def test_get_encoder_value_from_pos(
+    position, encoder_resolution, encoder_pos_at_zero, expected
 ):
-    actual = get_encoder_value_from_angle(
-        angle, encoder_resolution, encoder_pos_at_zero
+    actual = get_encoder_value_from_pos(
+        position, encoder_resolution, encoder_pos_at_zero
     )
     assert actual == expected, f"Expected {expected}, got {actual}"

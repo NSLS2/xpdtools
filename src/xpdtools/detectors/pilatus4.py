@@ -7,21 +7,28 @@ from typing import Annotated as A
 
 from ophyd_async.core import (
     DetectorTriggerLogic,
+    DeviceMock,
     SignalDict,
     SignalR,
     SignalRW,
     StandardReadable,
     StrictEnum,
     SubsetEnum,
+    callback_on_mock_put,
+    default_mock_class,
+    set_mock_put_proceeds,
+    set_mock_value,
 )
 from ophyd_async.core import (
     StandardReadableFormat as Format,
 )
 from ophyd_async.epics.adcore import (
     ADAcquireLogic,
+    ADBaseDataType,
     ADBaseIO,
     ADWriterFactory,
     AreaDetector,
+    NDFileHDF5IO,
     NDPluginBaseIO,
     prepare_exposures,
     trigger_info_from_num_images,
@@ -291,6 +298,74 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
         return await trigger_info_from_num_images(self.driver)
 
 
+class Pilatus4DetectorMock(DeviceMock["Pilatus4Detector"]):
+    """Mock behaviour that simulates Pilatus4 internal series acquisition."""
+
+    async def connect(self, device: "Pilatus4Detector") -> None:
+        """Mock signals to simulate Pilatus4 detector acquisition."""
+        # Set default array sizes on driver
+        set_mock_value(device.driver.array_size_x, 1280)
+        set_mock_value(device.driver.array_size_y, 720)
+        set_mock_value(device.driver.data_type, ADBaseDataType.INT32)
+
+        # Set default array sizes on HDF plugin if present
+        try:
+            hdf = device.get_plugin("hdf", NDFileHDF5IO)
+            set_mock_value(hdf.array_size0, 720)
+            set_mock_value(hdf.array_size1, 1280)
+            set_mock_value(hdf.file_path_exists, True)
+        except (AttributeError, TypeError):
+            hdf = None
+
+        # Set default signal values
+        set_mock_value(device.driver.acquire_time, 1.0)
+        set_mock_value(device.driver.acquire_period, 1.0001)
+        set_mock_value(device.driver.num_images, 1)
+        set_mock_value(device.driver.num_images_counter, 0)
+        set_mock_value(
+            device.driver.trigger_mode, Pilatus4TriggerMode.INTERNAL_SERIES
+        )
+
+        # Auto-adjust acquire_period when acquire_time exceeds it
+        async def _on_acquire_time_write(value: float) -> None:
+            current_period = await device.driver.acquire_period.get_value()
+            if current_period < value:
+                set_mock_value(device.driver.acquire_period, value + 0.0001)
+
+        callback_on_mock_put(device.driver.acquire_time, _on_acquire_time_write)
+
+        # Simulate acquisition on acquire=True
+        async def _do_acquisition():
+            trigger_mode = await device.driver.trigger_mode.get_value()
+            if trigger_mode != Pilatus4TriggerMode.INTERNAL_SERIES:
+                set_mock_put_proceeds(device.driver.acquire, True)
+                return
+
+            num_images = await device.driver.num_images.get_value()
+            acquire_time = await device.driver.acquire_time.get_value()
+            acquire_period = await device.driver.acquire_period.get_value()
+
+            for i in range(num_images):
+                await asyncio.sleep(acquire_time)
+                set_mock_value(device.driver.num_images_counter, i + 1)
+                if hdf is not None:
+                    num_captured = await hdf.num_captured.get_value()
+                    set_mock_value(hdf.num_captured, num_captured + 1)
+                if i < num_images - 1:
+                    await asyncio.sleep(acquire_period - acquire_time)
+
+            set_mock_value(device.driver.acquire, False)
+            set_mock_put_proceeds(device.driver.acquire, True)
+
+        def _on_acquire_write(value: bool) -> None:
+            if value:
+                set_mock_put_proceeds(device.driver.acquire, False)
+                asyncio.ensure_future(_do_acquisition())
+
+        callback_on_mock_put(device.driver.acquire, _on_acquire_write)
+
+
+@default_mock_class(Pilatus4DetectorMock)
 class Pilatus4Detector(AreaDetector[Pilatus4DriverIO]):
     """Create an Pilatus4 AreaDetector instance.
 

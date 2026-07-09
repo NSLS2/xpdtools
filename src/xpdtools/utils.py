@@ -1,5 +1,6 @@
 """General utility functions for xpdtools."""
 
+from datetime import datetime
 from typing import Any
 
 from bluesky.run_engine import RunEngine
@@ -7,6 +8,9 @@ from IPython.terminal.interactiveshell import TerminalInteractiveShell
 from IPython.terminal.prompts import Prompts
 from pygments.token import Token
 from rich import print as rprint
+import os
+from redis_json_dict.redis_json_dict import RedisJSONDict
+from nslsii.utils import open_redis_client
 
 
 def print_version_info():
@@ -46,3 +50,18 @@ class ProposalIDPrompt(Prompts):
             (Token.PromptNum, str(self.shell.execution_count)),
             (Token.Prompt, "]: "),
         ]
+
+
+def initialize_run_engine() -> RunEngine:
+    if os.environ.get("XPDTOOLS_RUNNING_IN_CI", "false").lower() == "true":
+        return RunEngine(
+            {
+                "data_session": "pass-123456",
+                "cycle": f"{datetime.today().year}-{int(datetime.today().month / 4) + 1}",
+            }
+        )
+    return RunEngine(
+        RedisJSONDict(
+            open_redis_client(redis_ssl=True), ""
+        )  # type: ignore (TODO: Loosen type of RE.md to Mapping from dict)
+    )

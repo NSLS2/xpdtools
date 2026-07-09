@@ -14,15 +14,15 @@ from ophyd_async.epics.core import epics_signal_r
 from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
 
 
-def get_encoder_value_from_angle(
-    angle: float, encoder_resolution: float, encoder_pos_at_zero: int
+def get_encoder_value_from_pos(
+    current_position: float, encoder_resolution: float, encoder_pos_at_zero: int
 ) -> int:
-    """Calculate the encoder value from an angle.
+    """Calculate the encoder value from a motor position.
 
     Parameters
     ----------
-    angle : float
-        The angle in degrees.
+    current_position : float
+        The current position of the motor.
     encoder_resolution : float
         The resolution of the encoder in counts per degree.
     encoder_pos_at_zero : int
@@ -31,9 +31,9 @@ def get_encoder_value_from_angle(
     Returns
     -------
     int
-        The encoder value corresponding to the given angle.
+        The encoder value corresponding to the given motor position.
     """
-    return int(angle * encoder_resolution + encoder_pos_at_zero)
+    return int(current_position * encoder_resolution + encoder_pos_at_zero)
 
 
 class VelocityRespectingMotorMock(DeviceMock[AsyncEpicsMotor]):
@@ -42,7 +42,7 @@ class VelocityRespectingMotorMock(DeviceMock[AsyncEpicsMotor]):
     async def connect(self, device: AsyncEpicsMotor) -> None:
         """Mock signals to simulate a move respecting velocity and acceleration."""
         set_mock_value(device.velocity, 10)
-        set_mock_value(device.max_velocity, 1000)
+        set_mock_value(device.max_velocity, 100)
         set_mock_value(device.acceleration_time, 1)
 
         # Motor starts in "done" state (not moving)
@@ -121,6 +121,8 @@ class RotationMotor(AsyncEpicsMotor):
             The encoder value corresponding to the given angle.
         """
         encoder_resolution = await self.encoder_resolution.get_value()
-        return get_encoder_value_from_angle(
-            angle, encoder_resolution, self.encoder_pos_at_zero
+        return get_encoder_value_from_pos(
+            current_position=angle,
+            encoder_resolution=encoder_resolution,
+            encoder_pos_at_zero=self.encoder_pos_at_zero,
         )

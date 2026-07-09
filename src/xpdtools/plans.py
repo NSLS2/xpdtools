@@ -18,7 +18,7 @@ from .flyers import (
     SingleAxisFlyscanInfo,
     SingleAxisFlyscanType,
 )
-from .motors import RotationMotor, get_encoder_value_from_angle
+from .motors import RotationMotor
 
 
 def single_axis_flyscan(
@@ -29,6 +29,7 @@ def single_axis_flyscan(
     start: float = 0.0,
     stop: float = 180.0,
     stream_name: str = "tomo",
+    acq_time_overhead: float = 0.001,
 ):
     """Perform a single axis flyscan with the given detectors, PandABox, and motor.
 
@@ -48,7 +49,10 @@ def single_axis_flyscan(
         Stop motor position of the scan, by default 180.0
     stream_name : str, optional
         Name of the data stream, by default "tomo"
+    acq_time_overhead : float, optional
+        Overhead time for acquisition for each frame in seconds, by default 0.001
     """
+
     all_detectors = [*detectors, panda]
 
     # Construct ephemeral flyer for the single axis flyscan
@@ -56,10 +60,27 @@ def single_axis_flyscan(
     all_devices = [*all_detectors, single_axis_panda_flyer, motor]
 
     # Get the start position in encoder counts
-    eres = yield from bps.rd(motor.encoder_resolution)
-    start_in_counts = get_encoder_value_from_angle(
-        start, eres, motor.encoder_pos_at_zero
-    )
+    # encoder_res = yield from bps.rd(motor.encoder_resolution)
+    # max_velocity = yield from bps.rd(motor.max_velocity)
+    acquisition_periods = []
+    for det in detectors:
+        acq_time = yield from bps.rd(det.driver.acquire_time)
+        acq_period = yield from bps.rd(det.driver.acquire_period)
+        if acq_period < acq_time:
+            acq_period = None
+        acquisition_periods.append((acq_time, acq_period))
+
+    # flyer_info, motor_info = construct_fly_info_models(
+    #     num_pulses=num_images,
+    #     acquisition_periods=[
+    #         (yield from bps.rd(det.driver.acquire_time), None) for det in detectors
+    #     ],
+    #     start_position=start,
+    #     stop_position=stop,
+    #     encoder_resolution=encoder_res,
+    #     max_motor_velocity=max_velocity,
+    #     encoder_pos_at_zero=(yield from bps.rd(motor.encoder_pos_at_zero)),
+    # )
 
     # Get the currently configured exposure times
     exposure_times = []
