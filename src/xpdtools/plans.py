@@ -3,20 +3,16 @@
 import bluesky.plan_stubs as bps
 from ophyd_async.core import (
     DetectorTrigger,
-    FlyMotorInfo,
     StandardFlyer,
     TriggerInfo,
 )
 from ophyd_async.epics.adcore import ADBaseIO, AreaDetector
 from ophyd_async.fastcs.panda import HDFPanda as PandABox
-from ophyd_async.fastcs.panda import (
-    PandaPcompDirection,
-)
 
 from .flyers import (
     SingleAxisFlyscanController,
-    SingleAxisFlyscanInfo,
     SingleAxisFlyscanType,
+    construct_fly_info_models,
 )
 from .motors import RotationMotor
 
@@ -30,6 +26,7 @@ def single_axis_flyscan(
     stop: float = 180.0,
     stream_name: str = "tomo",
     acq_time_overhead: float = 0.001,
+    flyscan_type: SingleAxisFlyscanType = SingleAxisFlyscanType.POSITION_BASED,
 ):
     """Perform a single axis flyscan with the given detectors, PandABox, and motor.
 
@@ -51,6 +48,8 @@ def single_axis_flyscan(
         Name of the data stream, by default "tomo"
     acq_time_overhead : float, optional
         Overhead time for acquisition for each frame in seconds, by default 0.001
+    flyscan_type : SingleAxisFlyscanType, default SingleAxisFlyscanType.POSITION_BASED
+        Type of flyscan to perform, by default SingleAxisFlyscanType.POSITION_BASED
     """
 
     all_detectors = [*detectors, panda]
@@ -60,33 +59,16 @@ def single_axis_flyscan(
     all_devices = [*all_detectors, single_axis_panda_flyer, motor]
 
     # Get the start position in encoder counts
-    # encoder_res = yield from bps.rd(motor.encoder_resolution)
-    # max_velocity = yield from bps.rd(motor.max_velocity)
+    encoder_res = yield from bps.rd(motor.encoder_resolution)
+    max_velocity = yield from bps.rd(motor.max_velocity)
+
     acquisition_periods = []
     for det in detectors:
         acq_time = yield from bps.rd(det.driver.acquire_time)
         acq_period = yield from bps.rd(det.driver.acquire_period)
         if acq_period < acq_time:
-            acq_period = None
-        acquisition_periods.append((acq_time, acq_period))
-
-    # flyer_info, motor_info = construct_fly_info_models(
-    #     num_pulses=num_images,
-    #     acquisition_periods=[
-    #         (yield from bps.rd(det.driver.acquire_time), None) for det in detectors
-    #     ],
-    #     start_position=start,
-    #     stop_position=stop,
-    #     encoder_resolution=encoder_res,
-    #     max_motor_velocity=max_velocity,
-    #     encoder_pos_at_zero=(yield from bps.rd(motor.encoder_pos_at_zero)),
-    # )
-
-    # Get the currently configured exposure times
-    exposure_times = []
-    for det in detectors:
-        exposure_time = yield from bps.rd(det.driver.acquire_time)
-        exposure_times.append(exposure_time)
+            acq_period = acq_time
+        acquisition_periods.append(acq_period)
 
     det_trigger_info = TriggerInfo(
         number_of_events=num_images,
@@ -98,19 +80,16 @@ def single_axis_flyscan(
         trigger=DetectorTrigger.EXTERNAL_LEVEL,
     )
 
-    single_axis_flyscan_info = SingleAxisFlyscanInfo(
-        pulse_width=1,
-        pulse_step=2,
-        start=start_in_counts,
-        scan_type=SingleAxisFlyscanType.POSITION_BASED,
+    flyer_info, motor_info = construct_fly_info_models(
         num_pulses=num_images,
-        direction=PandaPcompDirection.POSITIVE,
-    )
-
-    rotation_motor_info = FlyMotorInfo(
+        max_exposure_time=max(acquisition_periods),
         start_position=start,
-        end_position=stop,
-        time_for_move=max(exposure_times) * num_images,
+        stop_position=stop,
+        encoder_resolution=encoder_res,
+        max_motor_velocity=max_velocity,
+        encoder_pos_at_zero=motor.encoder_pos_at_zero,
+        acq_time_overhead=acq_time_overhead,
+        flyscan_type=flyscan_type,
     )
 
     _md = {
@@ -124,10 +103,10 @@ def single_axis_flyscan(
     # Stage All!
     yield from bps.stage_all(*all_detectors)
 
-    yield from bps.prepare(motor, rotation_motor_info, group="prepare")
+    yield from bps.prepare(motor, motor_info, group="prepare")
 
     yield from bps.prepare(
-        single_axis_panda_flyer, single_axis_flyscan_info, group="prepare"
+        single_axis_panda_flyer, flyer_info, group="prepare"
     )
 
     for det in detectors:
@@ -145,7 +124,7 @@ def single_axis_flyscan(
     yield from bps.collect_while_completing(
         all_devices,
         all_detectors,
-        flush_period=max(1, max(exposure_times)),
+        flush_period=max(1, max(acquisition_periods)),
         stream_name=stream_name,
     )
     yield from bps.unstage_all(*all_detectors)

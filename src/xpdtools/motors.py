@@ -35,7 +35,8 @@ def get_encoder_value_from_pos(
     """
     return int(current_position * encoder_resolution + encoder_pos_at_zero)
 
-
+# TODO: Get this upstreamed to ophyd_async and remove it from here.
+# It is a general utility that is not specific to XPD.
 class VelocityRespectingMotorMock(DeviceMock[AsyncEpicsMotor]):
     """Mock behaviour that respects motor velocity and acceleration time."""
 
