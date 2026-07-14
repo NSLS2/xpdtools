@@ -2,9 +2,9 @@
 
 import os
 
-import bluesky.plan_stubs as bps  # noqa: F401
-import bluesky.plans as bp  # noqa: F401
-from bluesky.run_engine import RunEngine, call_in_bluesky_event_loop  # noqa: F401
+import bluesky.plan_stubs as bps
+import bluesky.plans as bp
+from bluesky.run_engine import RunEngine, call_in_bluesky_event_loop
 from bluesky.utils import ProgressBarManager
 from bluesky_tiled_plugins import TiledWriter
 from IPython.core.getipython import get_ipython
