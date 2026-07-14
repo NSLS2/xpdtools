@@ -11,6 +11,7 @@ from rich import print as rprint
 import os
 from redis_json_dict.redis_json_dict import RedisJSONDict
 from nslsii.utils import open_redis_client
+from nslsii.sync_experiment import sync_experiment
 
 
 def print_version_info():
@@ -65,3 +66,7 @@ def initialize_run_engine() -> RunEngine:
             open_redis_client(redis_ssl=True), ""
         )  # type: ignore (TODO: Loosen type of RE.md to Mapping from dict)
     )
+
+
+def start_beamtime(proposal_id: int) -> None:
+    sync_experiment(proposal_id, "XPD", redis_ssl=True)

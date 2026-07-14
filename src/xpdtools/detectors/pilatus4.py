@@ -18,6 +18,7 @@ from ophyd_async.core import (
     default_mock_class,
     set_mock_put_proceeds,
     set_mock_value,
+    derived_signal_r,
 )
 from ophyd_async.core import (
     StandardReadableFormat as Format,
@@ -271,6 +272,34 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     # FileWriter Interface
     # fw_hdf5_format: A[SignalRW[EigerHDF5Format], PvSuffix.rbv("FWHDF5Format")]
 
+    def __init__(self, prefix: str, name: str = ""):
+        super().__init__(prefix, name=name)
+        self.data_type = derived_signal_r(
+            self.data_type_from_bit_depth_img,
+            bit_depth=self.bit_depth_image,
+            signed=self.signed_data
+        )
+
+    def data_type_from_bit_depth_img(
+        self,
+        bit_depth: int,
+        signed: bool
+    ) -> ADBaseDataType:
+        if signed:
+            if bit_depth == 8:
+                return ADBaseDataType.INT8
+            elif bit_depth == 16:
+                return ADBaseDataType.INT16
+            elif bit_depth == 32:
+                return ADBaseDataType.INT32
+        else:
+            if bit_depth == 8:
+                return ADBaseDataType.UINT8
+            elif bit_depth == 16:
+                return ADBaseDataType.UINT16
+            elif bit_depth == 32:
+                return ADBaseDataType.UINT32
+        raise ValueError(f"Failed to infer data type! Invalid bit depth and signedness {bit_depth}, {signed}")
 
 @dataclass
 class Pilatus4TriggerLogic(DetectorTriggerLogic):
@@ -280,19 +309,30 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
 
     def get_deadtime(self, config_values: SignalDict) -> float:
         return 0.001
+    
+    async def configure_stream2(self):
+        coros = [
+            self.driver.data_source.set(Pilatus4DataSource.STREAM),
+            self.driver.stream_enable.set(True),
+            self.driver.stream_version.set(SimplonStreamVersion.STREAM2),
+            self.driver.compression_algo.set(Pilatus4CompressionAlgo.BSLZ4),
+            self.driver.stream_decompress.set(False),
+        ]
+        await asyncio.gather(*coros)
 
     async def prepare_internal(self, num: int, livetime: float, deadtime: float):
+        await self.configure_stream2()
         await self.driver.trigger_mode.set(Pilatus4TriggerMode.INTERNAL_SERIES)
+        await self.driver.num_triggers.set(1)
         await prepare_exposures(self.driver, num, livetime, deadtime)
 
     async def prepare_edge(self, num: int, livetime: float):
-        coros = [
+        await asyncio.gather(
+            self.configure_stream2(),
             self.driver.trigger_mode.set(Pilatus4TriggerMode.EXTERNAL_SERIES),
             self.driver.num_triggers.set(num),
-            self.driver.acquire_time.set(livetime),
-            self.driver.num_images.set(1),
-        ]
-        await asyncio.gather(*coros)
+            prepare_exposures(self.driver, 1, livetime)
+        )
 
     async def default_trigger_info(self):
         return await trigger_info_from_num_images(self.driver)
