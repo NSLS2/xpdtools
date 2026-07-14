@@ -9,6 +9,7 @@ from ophyd_async.core import (
     derived_signal_r,
     set_mock_put_proceeds,
     set_mock_value,
+    StandardReadableFormat as Format,
 )
 from ophyd_async.epics.core import epics_signal_r
 from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
@@ -85,7 +86,6 @@ class RotationMotor(AsyncEpicsMotor):
 
     def __init__(self, prefix: str, encoder_pos_at_zero: int = 0, name: str = ""):
         super().__init__(prefix, name=name)
-        self.encoder_resolution = epics_signal_r(float, prefix + ".ERES")
         self.encoder_counts_per_rev = derived_signal_r(
             self.get_encoder_counts_per_rev,
             derived_units="counts",
