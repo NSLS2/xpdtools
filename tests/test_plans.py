@@ -19,7 +19,6 @@ from ophyd_async.epics.adcore import ADWriterFactory, NDFileHDF5IO
 from ophyd_async.fastcs.panda import DatasetTable, HDFPanda, PandaHdf5DatasetType
 
 from xpdtools.detectors.pilatus4 import Pilatus4Detector
-from xpdtools.flyers import SingleAxisFlyscanType
 from xpdtools.motors import RotationMotor
 from xpdtools.plans import single_axis_flyscan
 
@@ -105,10 +104,10 @@ async def devices(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "flyscan_type",
-    [SingleAxisFlyscanType.POSITION_BASED, SingleAxisFlyscanType.TIME_BASED],
+    "time_based",
+    [True, False],
 )
-def test_single_axis_flyscan(RE: RunEngine, devices, flyscan_type):
+def test_single_axis_flyscan(RE: RunEngine, devices, time_based: bool):
     """Test that single_axis_flyscan runs to completion and emits correct documents."""
     pilatus1, panda, motor = devices
 
@@ -127,7 +126,7 @@ def test_single_axis_flyscan(RE: RunEngine, devices, flyscan_type):
             num_images=NUM_IMAGES,
             start=SCAN_START,
             stop=SCAN_STOP,
-            flyscan_type=flyscan_type,
+            time_based=time_based,
         )
     )
 

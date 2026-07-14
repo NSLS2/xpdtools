@@ -13,7 +13,6 @@ from xpdtools.detectors.utils import get_detector_acq_times
 
 from .flyers import (
     SingleAxisFlyscanController,
-    SingleAxisFlyscanType,
     construct_fly_info_models,
 )
 from .motors import RotationMotor
@@ -28,7 +27,7 @@ def single_axis_flyscan(
     stop: float = 180.0,
     stream_name: str = "tomo",
     acq_time_overhead: float = 0.001,
-    flyscan_type: SingleAxisFlyscanType = SingleAxisFlyscanType.POSITION_BASED,
+    time_based: bool = False
 ):
     """Perform a single axis flyscan with the given detectors, PandABox, and motor.
 
@@ -85,7 +84,7 @@ def single_axis_flyscan(
         max_motor_velocity=max_velocity,
         encoder_pos_at_zero=motor.encoder_pos_at_zero,
         acq_time_overhead=acq_time_overhead,
-        flyscan_type=flyscan_type,
+        time_based=time_based,
     )
 
     _md = {

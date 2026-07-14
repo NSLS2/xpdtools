@@ -4,7 +4,6 @@ from ophyd_async.core import FlyMotorInfo
 from xpdtools.flyers import (
     PandaPcompDirection,
     SingleAxisFlyscanInfo,
-    SingleAxisFlyscanType,
     calculate_move_time_for_flyscan,
     construct_fly_info_models,
 )
@@ -42,7 +41,7 @@ def test_calculate_move_time_for_flyscan(
 @pytest.mark.parametrize(
     "num_pulses, max_exposure_time, start_position,"
     " stop_position, encoder_resolution, max_motor_velocity,"
-    " encoder_pos_at_zero, flyscan_type,"
+    " encoder_pos_at_zero, time_based,"
     " expected_flyer_info, expected_motor_info",
     [
         (
@@ -53,14 +52,14 @@ def test_calculate_move_time_for_flyscan(
             10.0,
             50.0,
             0,
-            SingleAxisFlyscanType.POSITION_BASED,
+            False,
             SingleAxisFlyscanInfo(
                 start=0,
                 num_pulses=11,
                 direction=PandaPcompDirection.POSITIVE,
                 pulse_width=1,
                 pulse_step=100,
-                scan_type=SingleAxisFlyscanType.POSITION_BASED,
+                time_based=False,
             ),
             FlyMotorInfo(start_position=0.0, end_position=100.0, time_for_move=2.0),
         ),
@@ -72,14 +71,14 @@ def test_calculate_move_time_for_flyscan(
             10.0,
             30.0,
             0,
-            SingleAxisFlyscanType.POSITION_BASED,
+            False,
             SingleAxisFlyscanInfo(
                 start=900,
                 num_pulses=5,
                 direction=PandaPcompDirection.NEGATIVE,
                 pulse_width=1,
                 pulse_step=225,
-                scan_type=SingleAxisFlyscanType.POSITION_BASED,
+                time_based=False,
             ),
             FlyMotorInfo(start_position=90.0, end_position=0.0, time_for_move=3.0),
         ),
@@ -91,14 +90,14 @@ def test_calculate_move_time_for_flyscan(
             10.0,
             25.0,
             0,
-            SingleAxisFlyscanType.TIME_BASED,
+            True,
             SingleAxisFlyscanInfo(
                 start=0,
                 num_pulses=10,
                 direction=PandaPcompDirection.POSITIVE,
                 pulse_width=0.1,
                 pulse_step=0.2,
-                scan_type=SingleAxisFlyscanType.TIME_BASED,
+                time_based=True,
             ),
             FlyMotorInfo(start_position=0.0, end_position=50.0, time_for_move=2.0),
         ),
@@ -110,14 +109,14 @@ def test_calculate_move_time_for_flyscan(
             360 / 70000,
             60.0,
             39240,
-            SingleAxisFlyscanType.TIME_BASED,
+            True,
             SingleAxisFlyscanInfo(
                 start=39240,
                 num_pulses=1801,
                 direction=PandaPcompDirection.POSITIVE,
                 pulse_width=0.05,
                 pulse_step=0.051,
-                scan_type=SingleAxisFlyscanType.TIME_BASED,
+                time_based=True,
             ),
             FlyMotorInfo(start_position=0.0, end_position=180.0, time_for_move=91.851),
         ),
@@ -131,7 +130,7 @@ def test_construct_fly_info_models(
     encoder_resolution,
     max_motor_velocity,
     encoder_pos_at_zero,
-    flyscan_type,
+    time_based,
     expected_flyer_info,
     expected_motor_info,
 ):
@@ -143,14 +142,14 @@ def test_construct_fly_info_models(
         encoder_resolution,
         max_motor_velocity,
         encoder_pos_at_zero,
-        flyscan_type=flyscan_type,
+        time_based=time_based,
     )
     assert flyer_info.start == expected_flyer_info.start
     assert flyer_info.num_pulses == expected_flyer_info.num_pulses
     assert flyer_info.direction == expected_flyer_info.direction
     assert flyer_info.pulse_width == pytest.approx(expected_flyer_info.pulse_width)
     assert flyer_info.pulse_step == pytest.approx(expected_flyer_info.pulse_step)
-    assert flyer_info.scan_type == expected_flyer_info.scan_type
+    assert flyer_info.time_based == expected_flyer_info.time_based
     assert motor_info.start_position == pytest.approx(
         expected_motor_info.start_position
     )

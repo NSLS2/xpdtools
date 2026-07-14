@@ -14,21 +14,6 @@ from ophyd_async.fastcs.panda import CommonPandaBlocks, PandaPcompDirection
 from .motors import get_encoder_value_from_pos
 
 
-class SingleAxisFlyscanType(StrEnum):
-    """Single axis flyscan type.
-
-    Attributes
-    ----------
-    POSITION_BASED : str
-        Position based flyscan
-    TIME_BASED : str
-        Time based flyscan
-    """
-
-    POSITION_BASED = "position_based"
-    TIME_BASED = "time_based"
-
-
 class SingleAxisFlyscanInfo(ConfinedModel):
     """Information for a single axis flyscan.
 
@@ -44,8 +29,8 @@ class SingleAxisFlyscanInfo(ConfinedModel):
         The width of each pulse, in counts for position based scans, s for time based
     pulse_step : float | int
         The step between pulses, in counts for position based scans, s for time based
-    scan_type : SingleAxisFlyscanType
-        The type of flyscan, either position based or time based
+    time_based : bool
+        If true, use equally spaced in time triggers. Otherwise, equally spaced in position
     """
 
     start: int
@@ -53,7 +38,7 @@ class SingleAxisFlyscanInfo(ConfinedModel):
     direction: PandaPcompDirection
     pulse_width: float | int
     pulse_step: float | int
-    scan_type: SingleAxisFlyscanType
+    time_based: bool
 
 
 class SingleAxisFlyscanController(FlyerController[SingleAxisFlyscanInfo]):
@@ -69,23 +54,29 @@ class SingleAxisFlyscanController(FlyerController[SingleAxisFlyscanInfo]):
             pcomp.dir.set(value.direction),
             pcomp.start.set(value.start),
         ]
-        if value.scan_type == SingleAxisFlyscanType.POSITION_BASED:
+        if not value.time_based:
             coros.extend(
                 [
                     pcomp.pulses.set(value.num_pulses),
                     pcomp.width.set(int(value.pulse_width)),
                     pcomp.step.set(int(value.pulse_step)),
+                    pulse.pulses.set(1),
+
+                    # TODO: Come up with how we can get always valid values
+                    # for these. Must be shorter than the pcomp pulses.
+                    pulse.width.set(0.000001),
+                    pulse.step.set(0.000002),
                 ]
             )
         else:
-            coros.extend(
+            coros.extend(   
                 [
                     pcomp.pulses.set(1),
                     pcomp.width.set(1),
                     pcomp.step.set(2),
                     pulse.pulses.set(value.num_pulses),
-                    pulse.width.set(int(value.pulse_width)),
-                    pulse.step.set(int(value.pulse_step)),
+                    pulse.width.set(value.pulse_width),
+                    pulse.step.set(value.pulse_step),
                 ]
             )
         await asyncio.gather(*coros)
@@ -145,7 +136,7 @@ def construct_fly_info_models(
     max_motor_velocity: float,
     encoder_pos_at_zero: int = 0,
     acq_time_overhead: float = 0.001,
-    flyscan_type: SingleAxisFlyscanType = SingleAxisFlyscanType.POSITION_BASED,
+    time_based: bool = False
 ) -> tuple[SingleAxisFlyscanInfo, FlyMotorInfo]:
     """Construct the fly info models for a single axis flyscan.
 
@@ -169,7 +160,7 @@ def construct_fly_info_models(
         acq_time_overhead=acq_time_overhead,
     )
 
-    if flyscan_type == SingleAxisFlyscanType.POSITION_BASED:
+    if not time_based:
         if travel_counts % (num_pulses - 1) != 0:
             # Subtract one from pulses because the num of steps is one less than
             # the number of pulses
@@ -198,7 +189,7 @@ def construct_fly_info_models(
         else PandaPcompDirection.NEGATIVE,
         pulse_width=pulse_width,
         pulse_step=pulse_step,
-        scan_type=flyscan_type,
+        time_based=time_based,
     )
 
     motor_info = FlyMotorInfo(
