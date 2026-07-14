@@ -9,6 +9,8 @@ from ophyd_async.core import (
 from ophyd_async.epics.adcore import ADBaseIO, AreaDetector
 from ophyd_async.fastcs.panda import HDFPanda as PandABox
 
+from xpdtools.detectors.utils import get_detector_acq_times
+
 from .flyers import (
     SingleAxisFlyscanController,
     SingleAxisFlyscanType,
@@ -61,13 +63,8 @@ def single_axis_flyscan(
     encoder_res = yield from bps.rd(motor.encoder_resolution)
     max_velocity = yield from bps.rd(motor.max_velocity)
 
-    acquisition_periods = []
-    for det in detectors:
-        acq_time = yield from bps.rd(det.driver.acquire_time)
-        acq_period = yield from bps.rd(det.driver.acquire_period)
-        if acq_period < acq_time:
-            acq_period = acq_time
-        acquisition_periods.append(acq_period)
+    acquisition_periods = yield from get_detector_acq_times(detectors)
+    max_acq_period = max(acquisition_periods)
 
     det_trigger_info = TriggerInfo(
         number_of_events=num_images,
@@ -81,7 +78,7 @@ def single_axis_flyscan(
 
     flyer_info, motor_info = construct_fly_info_models(
         num_pulses=num_images,
-        max_exposure_time=max(acquisition_periods),
+        max_exposure_time=max_acq_period,
         start_position=start,
         stop_position=stop,
         encoder_resolution=encoder_res,
@@ -99,11 +96,9 @@ def single_axis_flyscan(
     }
     yield from bps.open_run(md=_md)
 
-    # Stage All!
     yield from bps.stage_all(*all_detectors)
 
     yield from bps.prepare(motor, motor_info, group="prepare")
-
     yield from bps.prepare(single_axis_panda_flyer, flyer_info, group="prepare")
 
     for det in detectors:
@@ -118,10 +113,12 @@ def single_axis_flyscan(
     yield from bps.declare_stream(*all_detectors, name=stream_name)
 
     yield from bps.kickoff_all(*all_devices, wait=True)
+
+    flush_period = max(1, max_acq_period)
     yield from bps.collect_while_completing(
         all_devices,
         all_detectors,
-        flush_period=max(1, max(acquisition_periods)),
+        flush_period=flush_period,
         stream_name=stream_name,
     )
     yield from bps.unstage_all(*all_detectors)

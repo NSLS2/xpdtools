@@ -313,6 +313,8 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
         return 0.001
 
     async def configure_stream2(self):
+        """Configure the detector for stream2 acquisition mode."""
+
         coros = [
             self.driver.data_source.set(Pilatus4DataSource.STREAM),
             self.driver.stream_enable.set(True),
@@ -323,12 +325,16 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
         await asyncio.gather(*coros)
 
     async def prepare_internal(self, num: int, livetime: float, deadtime: float):
+        """Prepare the detector for internal series acquisition mode."""
+
         await self.configure_stream2()
         await self.driver.trigger_mode.set(Pilatus4TriggerMode.INTERNAL_SERIES)
         await self.driver.num_triggers.set(1)
         await prepare_exposures(self.driver, num, livetime, deadtime)
 
     async def prepare_edge(self, num: int, livetime: float):
+        """Prepare the detector for external series acquisition mode."""
+
         await asyncio.gather(
             self.configure_stream2(),
             self.driver.trigger_mode.set(Pilatus4TriggerMode.EXTERNAL_SERIES),
@@ -337,6 +343,8 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
         )
 
     async def default_trigger_info(self):
+        """Get default trigger info based on the number of images to acquire."""
+
         return await trigger_info_from_num_images(self.driver)
 
 
@@ -410,12 +418,20 @@ class Pilatus4DetectorMock(DeviceMock["Pilatus4Detector"]):
 class Pilatus4Detector(AreaDetector[Pilatus4DriverIO]):
     """Create an Pilatus4 AreaDetector instance.
 
-    :param prefix: EPICS PV prefix for the detector
-    :param writer_factories: Factories for file writer plugins and their data logics
-    :param driver_suffix: Suffix for the driver PV, defaults to "cam1:"
-    :param plugins: Additional areaDetector plugins to include
-    :param config_sigs: Additional signals to include in configuration
-    :param name: Name for the detector device
+    Parameters
+    ----------
+    prefix : str
+        EPICS PV prefix for the detector
+    writer_factories : ADWriterFactory
+        Factories for file writer plugins and their data logics
+    driver_suffix : str, optional
+        Suffix for the driver PV, by default "cam1:"
+    plugins : dict[str, NDPluginBaseIO], optional
+        Additional areaDetector plugins to include, by default None
+    config_sigs : Sequence[SignalR], optional
+        Additional signals to include in configuration, by default ()
+    name : str, optional
+        Name for the detector device, by default ""
     """
 
     def __init__(
