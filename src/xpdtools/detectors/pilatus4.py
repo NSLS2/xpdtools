@@ -168,7 +168,7 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
     ]
 
     # Trigger Setup
-    trigger: A[SignalRW[float], PvSuffix("Trigger")]
+    trigger_: A[SignalRW[float], PvSuffix("Trigger")]
     # trigger_exposure: A[SignalRW[float], PvSuffix.rbv("TriggerExposure")]
     num_triggers: A[SignalRW[int], PvSuffix.rbv("NumTriggers")]
     manual_trigger: A[SignalRW[bool], PvSuffix.rbv("ManualTrigger")]
@@ -346,7 +346,8 @@ class Pilatus4DetectorMock(DeviceMock["Pilatus4Detector"]):
         # Set default array sizes on driver
         set_mock_value(device.driver.array_size_x, 1280)
         set_mock_value(device.driver.array_size_y, 720)
-        set_mock_value(device.driver.data_type, ADBaseDataType.INT32)
+        set_mock_value(device.driver.bit_depth_image, 32)
+        set_mock_value(device.driver.signed_data, False)
 
         # Set default array sizes on HDF plugin if present
         try:

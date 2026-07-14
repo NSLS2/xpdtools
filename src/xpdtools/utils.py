@@ -12,6 +12,7 @@ import os
 from redis_json_dict.redis_json_dict import RedisJSONDict
 from nslsii.utils import open_redis_client
 from nslsii.sync_experiment import sync_experiment
+from contextlib import redirect_stdout
 
 
 def print_version_info():
@@ -68,5 +69,13 @@ def initialize_run_engine() -> RunEngine:
     )
 
 
-def start_beamtime(proposal_id: int) -> None:
-    sync_experiment(proposal_id, "XPD", redis_ssl=True)
+def start_beamtime(proposal_id: int, verbose: bool = True) -> None:
+    with open(os.devnull, "w") as f, redirect_stdout(f):
+        md = sync_experiment(proposal_id, "XPD", redis_ssl=True)
+
+    rprint(f"Started beamtime for proposal ID [bold][blue]{proposal_id}[/blue][/bold].\n")
+    rprint(f"Current time: [italic]{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/italic]\n")
+    proposal_md = md.get("proposal", {})
+    if proposal_md and verbose:
+        rprint(f"Proposal title: [italic]{proposal_md['title']}[/italic]\n")
+        rprint(f"Proposal type: [italic]{proposal_md['type']}[/italic], Proposal PI: [italic]{proposal_md['pi_name']}[/italic]\n")

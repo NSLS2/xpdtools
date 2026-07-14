@@ -33,7 +33,7 @@ dependencies = [
   "bluesky-tiled-plugins>=2.0.6",
   "ipython>=9.15.0",
   "nslsii>=0.11.9",
-  "ophyd-async[ca,pva]>=0.17a2",
+  "ophyd-async[ca,pva] @ git+https://github.com/bluesky/ophyd-async@main",
   "redis-json-dict>=0.2.2",
   "rich>=15.0.0",
   "tiled[client]>=0.2.12",
@@ -41,7 +41,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "ophyd-async[ca, pva, sim]>=0.17a2",
+    "ophyd-async[ca, pva, sim] @ git+https://github.com/bluesky/ophyd-async@main",
     "inflection",
     "import-linter",
     "numpydoc",
@@ -54,6 +54,7 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
     "pytest-faulthandler",
+    "pytest-mock",
     "pytest-forked",
     "pytest-insubprocess",
     "pytest-rerunfailures",
@@ -102,7 +103,11 @@ addopts = """
     --ignore=docs/examples --ignore=src/xpdtools/profiles
     """
 # https://iscinumpy.gitlab.io/post/bound-version-constraints/#watch-for-warnings
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    "ignore:tagMap is deprecated:DeprecationWarning:ldap3",
+    "ignore:typeMap is deprecated:DeprecationWarning:ldap3",
+]
 # Doctest python code in docs, python code in src docstrings, test functions in tests
 testpaths = "docs src tests"
 log_format = "%(asctime)s,%(msecs)03d %(levelname)s (%(threadName)s) %(message)s"
@@ -165,6 +170,3 @@ extend-ignore-names = ["RE"]
 [tool.importlinter]
 root_package = "xpdtools"
 
-[tool.uv.sources]
-ntnda-qt-viewer = { git = "https://github.com/jwlodek/ntnda-qt-viewer" }
-ophyd-async = { path = "../ophyd-async" }
