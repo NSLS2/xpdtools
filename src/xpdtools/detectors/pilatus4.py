@@ -314,7 +314,6 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
 
     async def configure_stream2(self):
         """Configure the detector for stream2 acquisition mode."""
-
         coros = [
             self.driver.data_source.set(Pilatus4DataSource.STREAM),
             self.driver.stream_enable.set(True),
@@ -326,7 +325,6 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
 
     async def prepare_internal(self, num: int, livetime: float, deadtime: float):
         """Prepare the detector for internal series acquisition mode."""
-
         await self.configure_stream2()
         await self.driver.trigger_mode.set(Pilatus4TriggerMode.INTERNAL_SERIES)
         await self.driver.num_triggers.set(1)
@@ -334,7 +332,6 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
 
     async def prepare_edge(self, num: int, livetime: float):
         """Prepare the detector for external series acquisition mode."""
-
         await asyncio.gather(
             self.configure_stream2(),
             self.driver.trigger_mode.set(Pilatus4TriggerMode.EXTERNAL_SERIES),
@@ -344,7 +341,6 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
 
     async def default_trigger_info(self):
         """Get default trigger info based on the number of images to acquire."""
-
         return await trigger_info_from_num_images(self.driver)
 
 
