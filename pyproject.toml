@@ -79,7 +79,7 @@ docs = [
 ]
 
 [project.scripts]
-bsui = "xpdtools:start_profile"
+xpd-profile = "xpdtools:start_profile"
 
 [project.urls]
 Homepage = "https://github.com/NSLS2/xpdtools"
