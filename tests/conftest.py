@@ -1,8 +1,8 @@
 import asyncio
 import pprint
 import warnings
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 # Pre-import websockets modules that trigger DeprecationWarnings so they are
 # cached in sys.modules before uvicorn's server thread imports them.

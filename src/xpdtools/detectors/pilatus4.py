@@ -16,9 +16,9 @@ from ophyd_async.core import (
     SubsetEnum,
     callback_on_mock_put,
     default_mock_class,
+    derived_signal_r,
     set_mock_put_proceeds,
     set_mock_value,
-    derived_signal_r,
 )
 from ophyd_async.core import (
     StandardReadableFormat as Format,
@@ -277,13 +277,11 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
         self.data_type = derived_signal_r(
             self.data_type_from_bit_depth_img,
             bit_depth=self.bit_depth_image,
-            signed=self.signed_data
+            signed=self.signed_data,
         )
 
     def data_type_from_bit_depth_img(
-        self,
-        bit_depth: int,
-        signed: bool
+        self, bit_depth: int, signed: bool
     ) -> ADBaseDataType:
         if signed:
             if bit_depth == 8:
@@ -299,7 +297,11 @@ class Pilatus4DriverIO(StandardReadable, ADBaseIO):
                 return ADBaseDataType.UINT16
             elif bit_depth == 32:
                 return ADBaseDataType.UINT32
-        raise ValueError(f"Failed to infer data type! Invalid bit depth and signedness {bit_depth}, {signed}")
+        raise ValueError(
+            "Failed to infer data type! "
+            f"Invalid bit depth and signedness {bit_depth}, {signed}"
+        )
+
 
 @dataclass
 class Pilatus4TriggerLogic(DetectorTriggerLogic):
@@ -309,7 +311,7 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
 
     def get_deadtime(self, config_values: SignalDict) -> float:
         return 0.001
-    
+
     async def configure_stream2(self):
         coros = [
             self.driver.data_source.set(Pilatus4DataSource.STREAM),
@@ -331,7 +333,7 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
             self.configure_stream2(),
             self.driver.trigger_mode.set(Pilatus4TriggerMode.EXTERNAL_SERIES),
             self.driver.num_triggers.set(num),
-            prepare_exposures(self.driver, 1, livetime)
+            prepare_exposures(self.driver, 1, livetime),
         )
 
     async def default_trigger_info(self):
@@ -363,9 +365,7 @@ class Pilatus4DetectorMock(DeviceMock["Pilatus4Detector"]):
         set_mock_value(device.driver.acquire_period, 1.0001)
         set_mock_value(device.driver.num_images, 1)
         set_mock_value(device.driver.num_images_counter, 0)
-        set_mock_value(
-            device.driver.trigger_mode, Pilatus4TriggerMode.INTERNAL_SERIES
-        )
+        set_mock_value(device.driver.trigger_mode, Pilatus4TriggerMode.INTERNAL_SERIES)
 
         # Auto-adjust acquire_period when acquire_time exceeds it
         async def _on_acquire_time_write(value: float) -> None:

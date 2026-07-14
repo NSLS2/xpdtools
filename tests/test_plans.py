@@ -12,7 +12,9 @@ from ophyd_async.core import (
     init_devices,
     set_mock_value,
 )
-from ophyd_async.core._mock_signal_utils import _get_mock_signal_backend
+from ophyd_async.core._mock_signal_utils import (  # noqa: PLC2701
+    _get_mock_signal_backend,
+)
 from ophyd_async.epics.adcore import ADWriterFactory, NDFileHDF5IO
 from ophyd_async.fastcs.panda import DatasetTable, HDFPanda, PandaHdf5DatasetType
 
@@ -39,9 +41,10 @@ def _setup_flyscan_coordination(panda, motor, pilatus, num_images: int):
 
     # 2. Set PandA data prerequisites
     set_mock_value(panda.data.directory_exists, 1)
-    set_mock_value(panda.data.datasets, DatasetTable(
-        name=["enc1"], dtype=[PandaHdf5DatasetType.FLOAT_64]
-    ))
+    set_mock_value(
+        panda.data.datasets,
+        DatasetTable(name=["enc1"], dtype=[PandaHdf5DatasetType.FLOAT_64]),
+    )
     set_mock_value(panda.pcap.active, False)
     set_mock_value(panda.pcomp[1].active, False)
     set_mock_value(panda.data.num_captured, 0)
@@ -148,9 +151,7 @@ def test_single_axis_flyscan(RE: RunEngine, devices, flyscan_type):
     descriptors = docs["descriptor"]
     assert len(descriptors) >= 1
     # The "tomo" stream descriptor should contain data keys for pilatus1 and enc1
-    tomo_descriptor = next(
-        d for d in descriptors if d.get("name") == "tomo"
-    )
+    tomo_descriptor = next(d for d in descriptors if d.get("name") == "tomo")
     assert "pilatus1" in tomo_descriptor["data_keys"]
     assert "enc1" in tomo_descriptor["data_keys"]
 
@@ -168,12 +169,8 @@ def test_single_axis_flyscan(RE: RunEngine, devices, flyscan_type):
     stream_resources = docs["stream_resource"]
 
     # Should have at least 2: one for pilatus HDF, one for panda HDF
-    pilatus_sr = next(
-        sr for sr in stream_resources if sr["data_key"] == "pilatus1"
-    )
-    panda_sr = next(
-        sr for sr in stream_resources if sr["data_key"] == "enc1"
-    )
+    pilatus_sr = next(sr for sr in stream_resources if sr["data_key"] == "pilatus1")
+    panda_sr = next(sr for sr in stream_resources if sr["data_key"] == "enc1")
 
     # Pilatus stream resource checks
     assert pilatus_sr["mimetype"] == "application/x-hdf5"

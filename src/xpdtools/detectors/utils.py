@@ -1,3 +1,6 @@
+"""Utility functions for xpdtools detectors."""
+
+import bluesky.plan_stubs as bps
 from ophyd_async.epics.adcore import AreaDetector
 
 
@@ -13,7 +16,8 @@ def get_detector_acq_times(detectors: list[AreaDetector]) -> list[float]:
     -------
     list[tuple[float, float | None]]
         List of tuples containing the acquisition time and period for each detector.
-        If the acquisition period is less than the acquisition time, it will be set to None.
+        If the acquisition period is less than the acquisition time,
+        it will be set to None.
     """
     acquisition_periods = []
     for det in detectors:

@@ -9,8 +9,13 @@ from pytest_mock import MockerFixture
 from xpdtools.utils import ProposalIDPrompt, start_beamtime
 
 
-def test_start_beamtime(mocker: MockerFixture, capsys: pytest.CaptureFixture[str]) -> None:
-    """Test that start_beamtime suppresses prints but input/getpass prompts still display."""
+def test_start_beamtime(
+    mocker: MockerFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Test that start_beamtime suppresses prints.
+
+    input/getpass prompts should still display.
+    """
 
     mock_input = mocker.patch("builtins.input", return_value="testuser")
     mock_getpass = mocker.patch("getpass.getpass", return_value="testpass")
@@ -49,7 +54,9 @@ def test_start_beamtime(mocker: MockerFixture, capsys: pytest.CaptureFixture[str
     assert "Test PI" in captured.out
 
 
-def test_start_beamtime_no_proposal(mocker: MockerFixture, capsys: pytest.CaptureFixture[str]) -> None:
+def test_start_beamtime_no_proposal(
+    mocker: MockerFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Test start_beamtime when no proposal metadata is returned."""
 
     mocker.patch("builtins.input", return_value="testuser")
@@ -72,7 +79,7 @@ def test_start_beamtime_no_proposal(mocker: MockerFixture, capsys: pytest.Captur
 
 
 def test_proposal_id_prompt(mocker: MockerFixture) -> None:
-    """Test that ProposalIDPrompt formats the prompt with proposal ID and execution count."""
+    """Test ProposalIDPrompt formats prompt with proposal ID."""
 
     mock_shell = mocker.MagicMock()
     mock_shell.execution_count = 5

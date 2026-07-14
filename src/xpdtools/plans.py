@@ -51,7 +51,6 @@ def single_axis_flyscan(
     flyscan_type : SingleAxisFlyscanType, default SingleAxisFlyscanType.POSITION_BASED
         Type of flyscan to perform, by default SingleAxisFlyscanType.POSITION_BASED
     """
-
     all_detectors = [*detectors, panda]
 
     # Construct ephemeral flyer for the single axis flyscan
@@ -105,9 +104,7 @@ def single_axis_flyscan(
 
     yield from bps.prepare(motor, motor_info, group="prepare")
 
-    yield from bps.prepare(
-        single_axis_panda_flyer, flyer_info, group="prepare"
-    )
+    yield from bps.prepare(single_axis_panda_flyer, flyer_info, group="prepare")
 
     for det in detectors:
         yield from bps.prepare(det, det_trigger_info, group="prepare")

@@ -1,9 +1,9 @@
 """XPD-D Bluesky profile for the 28-ID-2 beamline at NSLS-II."""
 
 import os
-from pathlib import Path
-from tempfile import mkdtemp
 
+import bluesky.plan_stubs as bps  # noqa: F401
+import bluesky.plans as bp  # noqa: F401
 from bluesky.run_engine import RunEngine, call_in_bluesky_event_loop  # noqa: F401
 from bluesky.utils import ProgressBarManager
 from bluesky_tiled_plugins import TiledWriter
@@ -19,10 +19,7 @@ from tiled.client import from_uri
 
 from xpdtools.detectors.pilatus4 import Pilatus4Detector
 from xpdtools.motors import RotationMotor
-from xpdtools.utils import ProposalIDPrompt, initialize_run_engine, start_beamtime
-from xpdtools.plans import single_axis_flyscan, SingleAxisFlyscanType
-import bluesky.plans as bp  # noqa: F401
-import bluesky.plan_stubs as bps  # noqa: F401
+from xpdtools.utils import ProposalIDPrompt, initialize_run_engine
 
 XPDTOOLS_RUNNING_IN_CI = (
     os.environ.get("XPDTOOLS_RUNNING_IN_CI", "false").lower() == "true"
@@ -39,7 +36,7 @@ RE.md["facility"] = "NSLS-II"
 RE.md["group"] = "XPD-D"
 RE.md["beamline_id"] = "28-ID-2"
 
-# Setup 
+# Setup
 RE.waiting_hook = ProgressBarManager()  # type: ignore[assignment]
 
 if not XPDTOOLS_RUNNING_IN_CI:

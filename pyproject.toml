@@ -169,4 +169,3 @@ extend-ignore-names = ["RE"]
 
 [tool.importlinter]
 root_package = "xpdtools"
-
