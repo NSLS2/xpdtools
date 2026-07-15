@@ -88,7 +88,7 @@ Changelog = "https://github.com/NSLS2/xpdtools/releases"
 
 [project.optional-dependencies]
 profiles = [
-    "pyside6>=6.11.1",
+    "pyside6>=6.9,<6.10",
     "qtpy>=2.4.3",
 ]
 
