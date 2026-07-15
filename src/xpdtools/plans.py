@@ -27,7 +27,7 @@ def single_axis_flyscan(
     stop: float = 180.0,
     stream_name: str = "tomo",
     acq_time_overhead: float = 0.001,
-    time_based: bool = False
+    time_based: bool = False,
 ):
     """Perform a single axis flyscan with the given detectors, PandABox, and motor.
 

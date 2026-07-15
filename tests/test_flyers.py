@@ -49,7 +49,7 @@ def test_calculate_move_time_for_flyscan(
             0.1,
             0.0,
             100.0,
-            10.0,
+            0.1,
             50.0,
             0,
             False,
@@ -68,7 +68,7 @@ def test_calculate_move_time_for_flyscan(
             0.2,
             90.0,
             0.0,
-            10.0,
+            0.1,
             30.0,
             0,
             False,
@@ -163,9 +163,9 @@ def test_construct_fly_info_models(
     " encoder_pos_at_zero, expected_match",
     [
         # travel_counts=1000, num_pulses-1=6 -> 1000 % 6 != 0
-        (7, 0.1, 0.0, 100.0, 10.0, 50.0, 0, "not evenly divisible"),
+        (7, 0.1, 0.0, 100.0, 0.1, 50.0, 0, "not evenly divisible"),
         # travel_counts=10, num_pulses-1=10 -> 10 < 10*2=20
-        (11, 0.1, 0.0, 1.0, 10.0, 50.0, 0, "less than the minimum required"),
+        (11, 0.1, 0.0, 1.0, 0.1, 50.0, 0, "less than the minimum required"),
     ],
 )
 def test_construct_fly_info_models_raises(

@@ -9,9 +9,7 @@ from ophyd_async.core import (
     derived_signal_r,
     set_mock_put_proceeds,
     set_mock_value,
-    StandardReadableFormat as Format,
 )
-from ophyd_async.epics.core import epics_signal_r
 from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
 
 

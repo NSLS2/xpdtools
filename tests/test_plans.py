@@ -91,7 +91,7 @@ async def devices(tmp_path: Path):
             name="pilatus1",
         )
     # Set mock values for fast test execution
-    set_mock_value(motor.encoder_resolution, 10.0)
+    set_mock_value(motor.encoder_resolution, 0.1)
     set_mock_value(motor.max_velocity, 1000.0)
     set_mock_value(motor.acceleration_time, 0.0)
     set_mock_value(pilatus1.driver.acquire_time, 0.001)

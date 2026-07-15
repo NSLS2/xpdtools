@@ -1,7 +1,6 @@
 """Flyer classes for XPD beamline at NSLS-II."""
 
 import asyncio
-from enum import StrEnum
 
 from ophyd_async.core import (
     ConfinedModel,
@@ -30,7 +29,7 @@ class SingleAxisFlyscanInfo(ConfinedModel):
     pulse_step : float | int
         The step between pulses, in counts for position based scans, s for time based
     time_based : bool
-        If true, use equally spaced in time triggers. Otherwise, equally spaced in position
+        If true, equally spaced in time triggers. Otherwise, equally spaced in position
     """
 
     start: int
@@ -61,7 +60,6 @@ class SingleAxisFlyscanController(FlyerController[SingleAxisFlyscanInfo]):
                     pcomp.width.set(int(value.pulse_width)),
                     pcomp.step.set(int(value.pulse_step)),
                     pulse.pulses.set(1),
-
                     # TODO: Come up with how we can get always valid values
                     # for these. Must be shorter than the pcomp pulses.
                     pulse.width.set(0.000001),
@@ -69,7 +67,7 @@ class SingleAxisFlyscanController(FlyerController[SingleAxisFlyscanInfo]):
                 ]
             )
         else:
-            coros.extend(   
+            coros.extend(
                 [
                     pcomp.pulses.set(1),
                     pcomp.width.set(1),
@@ -136,7 +134,7 @@ def construct_fly_info_models(
     max_motor_velocity: float,
     encoder_pos_at_zero: int = 0,
     acq_time_overhead: float = 0.001,
-    time_based: bool = False
+    time_based: bool = False,
 ) -> tuple[SingleAxisFlyscanInfo, FlyMotorInfo]:
     """Construct the fly info models for a single axis flyscan.
 
