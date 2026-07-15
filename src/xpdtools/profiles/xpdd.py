@@ -6,6 +6,7 @@ import bluesky.plan_stubs as bps
 import bluesky.plans as bp
 from bluesky.run_engine import RunEngine, call_in_bluesky_event_loop
 from bluesky.utils import ProgressBarManager
+from bluesky.callbacks.best_effort import BestEffortCallback
 from bluesky_tiled_plugins import TiledWriter
 from IPython.core.getipython import get_ipython
 from IPython.terminal.interactiveshell import TerminalInteractiveShell
@@ -20,6 +21,7 @@ from tiled.client import from_uri
 from xpdtools.detectors.pilatus4 import Pilatus4Detector
 from xpdtools.motors import RotationMotor
 from xpdtools.utils import ProposalIDPrompt, initialize_run_engine
+from xpdtools.plans import single_axis_flyscan
 
 XPDTOOLS_RUNNING_IN_CI = (
     os.environ.get("XPDTOOLS_RUNNING_IN_CI", "false").lower() == "true"
@@ -36,8 +38,9 @@ RE.md["facility"] = "NSLS-II"
 RE.md["group"] = "XPD-D"
 RE.md["beamline_id"] = "28-ID-2"
 
-# Setup
+# Setup progress bars
 RE.waiting_hook = ProgressBarManager()  # type: ignore[assignment]
+
 
 if not XPDTOOLS_RUNNING_IN_CI:
     tiled_writing_client = from_uri(
@@ -56,9 +59,14 @@ else:
     tiled_reading_client = c = from_uri(tiled_server.uri)
 
 
+# Setup writing to the database
 tw = TiledWriter(tiled_writing_client)
 RE.subscribe(tw)
 
+# Setup BEC
+bec = BestEffortCallback()
+bec.disable_plots()
+RE.subscribe(bec)
 
 ipython = get_ipython()
 if ipython is not None and isinstance(ipython, TerminalInteractiveShell):
@@ -73,8 +81,8 @@ if ipython is not None and isinstance(ipython, TerminalInteractiveShell):
 path_provider = NSLS2PathProvider(RE.md, beamline_tla="xpd", beamline_tla_suffix="-new")
 
 with init_devices(mock=XPDTOOLS_RUNNING_IN_CI):
-    panda = HDFPanda("XF:28ID2-ES{PANDA:1}:", path_provider)
-    rot_motor = RotationMotor("XF:28IDD-ES:2{Twister}Mtr", encoder_pos_at_zero=-3521)
+    panda1 = HDFPanda("XF:28ID2-ES{PANDA:1}:", path_provider)
+    rot_motor = RotationMotor("XF:28IDD-ES:2{Twister}Mtr", encoder_pos_at_zero=-647)
     pilatus1 = Pilatus4Detector(
         "XF:28ID2-ES{Pilatus4-Det:1}", ADWriterFactory.hdf(path_provider)
     )

@@ -87,6 +87,11 @@ Issues = "https://github.com/NSLS2/xpdtools/issues"
 Discussions = "https://github.com/NSLS2/xpdtools/discussions"
 Changelog = "https://github.com/NSLS2/xpdtools/releases"
 
+[project.optional-dependencies]
+profiles = [
+    "qtpy>=2.4.3",
+]
+
 [tool.setuptools_scm]
 write_to = "src/xpdtools/_version.py"
 
@@ -170,3 +175,8 @@ extend-ignore-names = ["RE"]
 
 [tool.importlinter]
 root_package = "xpdtools"
+
+[tool.uv]
+required-environments = [
+    "sys_platform == 'linux' and platform_machine >= 'manylinux_2_28_x86_64'"
+]

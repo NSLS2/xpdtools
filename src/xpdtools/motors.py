@@ -34,7 +34,7 @@ def get_encoder_value_from_pos(
     int
         The encoder value corresponding to the given motor position.
     """
-    return int(current_position * encoder_resolution + encoder_pos_at_zero)
+    return int(current_position / encoder_resolution + encoder_pos_at_zero)
 
 
 # TODO: Get this upstreamed to ophyd_async and remove it from here.
