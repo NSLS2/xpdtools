@@ -10,7 +10,7 @@ authors = [
 description = "Tools for NSLS-II XPD beamline"
 readme = "README.md"
 license.file = "LICENSE"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 classifiers = [
   "Development Status :: 1 - Planning",
   "Intended Audience :: Science/Research",
@@ -23,7 +23,6 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering",
   "Typing :: Typed",
 ]
@@ -89,6 +88,7 @@ Changelog = "https://github.com/NSLS2/xpdtools/releases"
 
 [project.optional-dependencies]
 profiles = [
+    "pyside6>=6.11.1",
     "qtpy>=2.4.3",
 ]
 
@@ -175,8 +175,3 @@ extend-ignore-names = ["RE"]
 
 [tool.importlinter]
 root_package = "xpdtools"
-
-[tool.uv]
-required-environments = [
-    "sys_platform == 'linux' and platform_machine >= 'manylinux_2_28_x86_64'"
-]
