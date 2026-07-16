@@ -14,9 +14,8 @@ from nslsii.ophyd_async.providers import NSLS2PathProvider
 from ophyd_async.core import (
     init_devices,
 )
+from ophyd_async.epics.adcore import ADWriterFactory, NDStatsIO, PluginSignalDataLogic
 from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
-
-from ophyd_async.epics.adcore import ADWriterFactory, PluginSignalDataLogic, NDStatsIO
 from ophyd_async.fastcs.panda import HDFPanda
 from ophyd_async.plan_stubs import retrieve_settings, store_settings
 from tiled.client import from_uri
@@ -89,8 +88,12 @@ with init_devices(mock=XPDTOOLS_RUNNING_IN_CI):
     step_motor = AsyncEpicsMotor("XF:28IDD-ES:2{Twister}Mtr", name="amazon_motor")
     pilatus1_stats1 = NDStatsIO("XF:28ID2-ES{Pilatus4-Det:1}Stats1:")
     pilatus1 = Pilatus4Detector(
-        "XF:28ID2-ES{Pilatus4-Det:1}", ADWriterFactory.hdf(path_provider), plugins={"stats1": pilatus1_stats1}
+        "XF:28ID2-ES{Pilatus4-Det:1}",
+        ADWriterFactory.hdf(path_provider),
+        plugins={"stats1": pilatus1_stats1},
     )
-    pilatus1.add_detector_logics(PluginSignalDataLogic(pilatus1.driver, pilatus1.stats1.total))
+    pilatus1.add_detector_logics(
+        PluginSignalDataLogic(pilatus1.driver, pilatus1.stats1.total)
+    )
 
 panda_settings = PackagedSettingsProvider()

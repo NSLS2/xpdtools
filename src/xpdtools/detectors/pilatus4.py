@@ -325,10 +325,12 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
 
     async def prepare_internal(self, num: int, livetime: float, deadtime: float):
         """Prepare the detector for internal series acquisition mode."""
-        await self.configure_stream2()
-        await self.driver.trigger_mode.set(Pilatus4TriggerMode.INTERNAL_SERIES)
-        await self.driver.num_triggers.set(1)
-        await prepare_exposures(self.driver, num, livetime, deadtime)
+        await asyncio.gather(
+            self.configure_stream2(),
+            self.driver.trigger_mode.set(Pilatus4TriggerMode.INTERNAL_SERIES),
+            self.driver.num_triggers.set(1),
+            prepare_exposures(self.driver, num, livetime, deadtime),
+        )
 
     async def prepare_edge(self, num: int, livetime: float):
         """Prepare the detector for external series acquisition mode."""
@@ -336,7 +338,7 @@ class Pilatus4TriggerLogic(DetectorTriggerLogic):
             self.configure_stream2(),
             self.driver.trigger_mode.set(Pilatus4TriggerMode.EXTERNAL_SERIES),
             self.driver.num_triggers.set(num),
-            prepare_exposures(self.driver, 1, livetime),
+            prepare_exposures(self.driver, 1, livetime, 0.001),
         )
 
     async def default_trigger_info(self):
