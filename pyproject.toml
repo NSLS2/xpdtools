@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61", "setuptools_scm[toml]>=7"]
+requires = ["setuptools>=61", "setuptools_scm[toml]>=10.2.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -35,7 +35,7 @@ dependencies = [
   "ophyd-async[ca,pva] @ git+https://github.com/bluesky/ophyd-async@main",
   "redis-json-dict>=0.2.2",
   "rich>=15.0.0",
-  "tiled[client]>=0.2.12",
+  "tiled[client]>=0.2.14",
 ]
 
 [dependency-groups]
@@ -62,7 +62,7 @@ dev = [
     "scanspec>=1.0a1",
     "types-mock",
     "types-pyyaml",
-    "tiled[client,server]>=0.2.9",
+    "tiled[client,server]>=0.2.14",
     "bluesky-tiled-plugins>=2.0.2",
     "h5py>=3.16.0",
     "ty>=0.0.57",
@@ -88,7 +88,7 @@ Changelog = "https://github.com/NSLS2/xpdtools/releases"
 
 [project.optional-dependencies]
 profiles = [
-    "pyside6>=6.9,<6.10",
+    "pyside6>=6.11.1,<6.12",
     "qtpy>=2.4.3",
 ]
 
