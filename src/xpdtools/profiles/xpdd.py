@@ -91,6 +91,6 @@ with init_devices(mock=XPDTOOLS_RUNNING_IN_CI):
     pilatus1 = Pilatus4Detector(
         "XF:28ID2-ES{Pilatus4-Det:1}", ADWriterFactory.hdf(path_provider), plugins={"stats1": pilatus1_stats1}
     )
-    # pilatus1.add_detector_logics(PluginSignalDataLogic(pilatus1.driver, pilatus1.stats1.total))
+    pilatus1.add_detector_logics(PluginSignalDataLogic(pilatus1.driver, pilatus1.stats1.total))
 
 panda_settings = PackagedSettingsProvider()

@@ -32,7 +32,7 @@ dependencies = [
   "bluesky-tiled-plugins>=2.0.6",
   "ipython>=9.15.0",
   "nslsii>=0.11.9",
-  "ophyd-async[ca,pva] @ git+https://github.com/bluesky/ophyd-async@main",
+  "ophyd-async[ca,pva] @ git+https://github.com/jwlodek/ophyd-async@show-warning-but-dont-raise-if-single-only-dl",
   "redis-json-dict>=0.2.2",
   "rich>=15.0.0",
   "tiled[client]>=0.2.12",
@@ -40,7 +40,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "ophyd-async[ca, pva, sim] @ git+https://github.com/bluesky/ophyd-async@main",
+    "ophyd-async[ca, pva, sim] @ git+https://github.com/jwlodek/ophyd-async@show-warning-but-dont-raise-if-single-only-dl",
     "inflection",
     "import-linter",
     "numpydoc",

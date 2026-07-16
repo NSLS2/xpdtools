@@ -2458,8 +2458,8 @@ wheels = [
 
 [[package]]
 name = "ophyd-async"
-version = "0.19.4.dev31+ge7dc84db0"
-source = { git = "https://github.com/bluesky/ophyd-async?rev=main#e7dc84db02780dfba98aedb8dd792ad1872068c2" }
+version = "0.1.dev994+g4d578f92c"
+source = { git = "https://github.com/jwlodek/ophyd-async?rev=show-warning-but-dont-raise-if-single-only-dl#4d578f92ca1199274bfe0884601ce6ddb10aeec7" }
 dependencies = [
     { name = "bluesky" },
     { name = "colorlog" },
@@ -4741,7 +4741,7 @@ requires-dist = [
     { name = "bluesky-tiled-plugins", specifier = ">=2.0.6" },
     { name = "ipython", specifier = ">=9.15.0" },
     { name = "nslsii", specifier = ">=0.11.9" },
-    { name = "ophyd-async", extras = ["ca", "pva"], git = "https://github.com/bluesky/ophyd-async?rev=main" },
+    { name = "ophyd-async", extras = ["ca", "pva"], git = "https://github.com/jwlodek/ophyd-async?rev=show-warning-but-dont-raise-if-single-only-dl" },
     { name = "pyside6", marker = "extra == 'profiles'", specifier = ">=6.9,<6.10" },
     { name = "qtpy", marker = "extra == 'profiles'", specifier = ">=2.4.3" },
     { name = "redis-json-dict", specifier = ">=0.2.2" },
@@ -4757,7 +4757,7 @@ dev = [
     { name = "import-linter" },
     { name = "inflection" },
     { name = "numpydoc" },
-    { name = "ophyd-async", extras = ["ca", "pva", "sim"], git = "https://github.com/bluesky/ophyd-async?rev=main" },
+    { name = "ophyd-async", extras = ["ca", "pva", "sim"], git = "https://github.com/jwlodek/ophyd-async?rev=show-warning-but-dont-raise-if-single-only-dl" },
     { name = "pickleshare" },
     { name = "pipdeptree" },
     { name = "pre-commit" },
