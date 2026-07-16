@@ -14,10 +14,14 @@ from nslsii.ophyd_async.providers import NSLS2PathProvider
 from ophyd_async.core import (
     init_devices,
 )
-from ophyd_async.epics.adcore import ADWriterFactory
+from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
+
+from ophyd_async.epics.adcore import ADWriterFactory, PluginSignalDataLogic, NDStatsIO
 from ophyd_async.fastcs.panda import HDFPanda
+from ophyd_async.plan_stubs import retrieve_settings, store_settings
 from tiled.client import from_uri
 
+from xpdtools.detectors.panda import PackagedSettingsProvider
 from xpdtools.detectors.pilatus4 import Pilatus4Detector
 from xpdtools.motors import RotationMotor
 from xpdtools.plans import single_axis_flyscan
@@ -65,7 +69,6 @@ RE.subscribe(tw)
 
 # Setup BEC
 bec = BestEffortCallback()
-bec.disable_plots()
 RE.subscribe(bec)
 
 ipython = get_ipython()
@@ -82,7 +85,12 @@ path_provider = NSLS2PathProvider(RE.md, beamline_tla="xpd", beamline_tla_suffix
 
 with init_devices(mock=XPDTOOLS_RUNNING_IN_CI):
     panda1 = HDFPanda("XF:28ID2-ES{PANDA:1}:", path_provider)
-    rot_motor = RotationMotor("XF:28IDD-ES:2{Twister}Mtr", encoder_pos_at_zero=-647)
+    rot_motor = RotationMotor("XF:28IDD-ES:2{Twister}Mtr", encoder_pos_at_zero=211)
+    step_motor = AsyncEpicsMotor("XF:28IDD-ES:2{Twister}Mtr", name="amazon_motor")
+    pilatus1_stats1 = NDStatsIO("XF:28ID2-ES{Pilatus4-Det:1}Stats1:")
     pilatus1 = Pilatus4Detector(
-        "XF:28ID2-ES{Pilatus4-Det:1}", ADWriterFactory.hdf(path_provider)
+        "XF:28ID2-ES{Pilatus4-Det:1}", ADWriterFactory.hdf(path_provider), plugins={"stats1": pilatus1_stats1}
     )
+    # pilatus1.add_detector_logics(PluginSignalDataLogic(pilatus1.driver, pilatus1.stats1.total))
+
+panda_settings = PackagedSettingsProvider()

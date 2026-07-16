@@ -176,7 +176,7 @@ def construct_fly_info_models(
         pulse_width = 1
         pulse_step = travel_counts // (num_pulses - 1)
     else:
-        pulse_width = max_exposure_time
+        pulse_width = max_exposure_time + acq_time_overhead
         pulse_step = move_time / num_pulses
 
     flyer_info = SingleAxisFlyscanInfo(

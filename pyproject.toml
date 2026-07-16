@@ -92,6 +92,9 @@ profiles = [
     "qtpy>=2.4.3",
 ]
 
+[tool.setuptools.package-data]
+"xpdtools.panda_configurations" = ["*.yaml"]
+
 [tool.setuptools_scm]
 write_to = "src/xpdtools/_version.py"
 
