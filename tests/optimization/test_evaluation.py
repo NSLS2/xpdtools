@@ -8,8 +8,8 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
-from xpd_tools.optimization.agent import build_objectives
 
+from xpd_tools.optimization.agent import build_objectives
 from xpd_tools.optimization.evaluation import (
     DEFAULT_PLQY_PARAMS,
     QEPRO_FIELDS,

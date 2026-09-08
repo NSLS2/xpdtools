@@ -1104,9 +1104,7 @@ def create_xray_uvvis_plan(context: XrayUvvisPlanContext) -> Callable[..., Any]:
                     resolved.wash_pumps,
                     resolved.wash["rate_list"][:wash_count],
                     syringe_sizes=resolved.wash["syringe_list"][:wash_count],
-                    syringe_materials=resolved.wash["syringe_mater_list"][
-                        :wash_count
-                    ],
+                    syringe_materials=resolved.wash["syringe_mater_list"][:wash_count],
                     set_targets=resolved.wash["set_target_list"][:wash_count],
                     target_volumes=resolved.wash["target_vol_list"][:wash_count],
                     rate_unit=str(resolved.flow["rate_unit"]),
