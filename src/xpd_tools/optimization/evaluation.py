@@ -7,53 +7,42 @@ import logging
 import re
 import time
 from collections.abc import Callable, Hashable, Mapping, Sequence
-from dataclasses import dataclass, replace
-from enum import StrEnum
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeVar, cast
 
 import numpy as np
 from tiled.queries import Eq
 
 from .analysis import (
+    analyze_pl_spectra,
     calculate_plqy,
-    classify_pl,
     correct_absorbance,
-    fit_pl_spectrum,
     pearson_profile,
-    select_pl_spectra,
 )
 
+logger = logging.getLogger(__name__)
 
-class PdfEvaluationMode(StrEnum):
-    """Select which PDF correlations participate in optimization."""
-
-    RAW_ONLY = "raw_only"
-    PDF_FIT_OBJECTIVES = "pdf_fit_objectives"
-    RAW_OBJECTIVES_PDF_FIT_TRACKED = "raw_objectives_pdf_fit_tracked"
-
-
-@dataclass(frozen=True)
-class PdfFitConfig:
-    """Configure PDF correlation and optional pdffit2 refinement."""
-
-    mode: PdfEvaluationMode | str = PdfEvaluationMode.PDF_FIT_OBJECTIVES
-    qmax: float = 18.0
-    rmax: float = 120.0
-    qdamp: float = 0.031
-    qbroad: float = 0.032
-    fix_apd: bool = True
-    toler: float = 0.000001
-
-    def __post_init__(self) -> None:
-        """Normalize a string mode to its enum value."""
-        object.__setattr__(self, "mode", PdfEvaluationMode(self.mode))
+_PHASE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_ROOT_FIELDS = frozenset({"schema_version", "phases"})
+_PHASE_FIELDS = frozenset(
+    {"name", "gr_path", "cif_path", "minimize", "constraint_profile"}
+)
+_PHASE_REQUIRED_FIELDS = frozenset({"name", "gr_path", "minimize"})
+_QEPRO_FIELDS = ("QEPro_x_axis", "QEPro_output")
+_PDF_QMAX = 18.0
+_PDF_RMAX = 120.0
+_PDF_RMIN = 2.5
+_PDF_QDAMP = 0.031
+_PDF_QBROAD = 0.032
+_PDF_TOLERANCE = 1e-6
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
-class PdfPhaseReference:
-    """External PDF reference inputs and optimization direction for one phase."""
+class _PdfPhaseReference:
+    """Validated external PDF inputs for one phase."""
 
     name: str
     gr_path: Path
@@ -62,114 +51,17 @@ class PdfPhaseReference:
     constraint_profile: Literal["none", "cs_pb_br3"] = "none"
 
 
-_PHASE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
-_ROOT_FIELDS = frozenset({"schema_version", "phases"})
-_PHASE_FIELDS = frozenset(
-    {"name", "gr_path", "cif_path", "minimize", "constraint_profile"}
-)
-_PHASE_REQUIRED_FIELDS = frozenset({"name", "gr_path", "minimize"})
-
-
 @dataclass(frozen=True)
-class PdfReferenceConfig:
-    """Ordered PDF phase references loaded from an external configuration."""
+class PlqyReference:
+    """Reference values used for relative PLQY calculation."""
 
-    phases: tuple[PdfPhaseReference, ...]
-
-    def __post_init__(self) -> None:
-        """Enforce phase identity and required GR-file invariants."""
-        object.__setattr__(self, "phases", tuple(self.phases))
-        if not self.phases:
-            raise ValueError("phases must contain at least one PDF reference")
-
-        names: set[str] = set()
-        for index, phase in enumerate(self.phases):
-            field = f"phases[{index}]"
-            if not _PHASE_NAME.fullmatch(phase.name):
-                raise ValueError(
-                    f"{field}.name must match {_PHASE_NAME.pattern!r}: {phase.name!r}"
-                )
-            if phase.name in names:
-                raise ValueError(f"{field}.name is duplicated: {phase.name!r}")
-            names.add(phase.name)
-            if not isinstance(phase.minimize, bool):
-                raise ValueError(f"{field}.minimize must be a boolean")
-            if phase.constraint_profile not in {"none", "cs_pb_br3"}:
-                raise ValueError(
-                    f"{field}.constraint_profile is unsupported: "
-                    f"{phase.constraint_profile!r}"
-                )
-            if not phase.gr_path.is_file():
-                raise ValueError(f"{field}.gr_path is not a file: {phase.gr_path}")
-
-    @classmethod
-    def from_json(cls, path: str | Path) -> PdfReferenceConfig:
-        """Load and validate a version-1 external reference configuration."""
-        config_path = Path(path).expanduser().resolve()
-        try:
-            document = json.loads(config_path.read_text())
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"invalid JSON in {config_path}: {exc.msg}") from exc
-
-        if not isinstance(document, dict):
-            raise ValueError(f"configuration root must be an object: {config_path}")
-        _require_exact_fields(document, _ROOT_FIELDS, _ROOT_FIELDS, "configuration")
-        if type(document["schema_version"]) is not int:
-            raise ValueError("schema_version must be the integer 1")
-        if document["schema_version"] != 1:
-            raise ValueError(
-                f"schema_version is unsupported: {document['schema_version']!r}"
-            )
-        raw_phases = document["phases"]
-        if not isinstance(raw_phases, list) or not raw_phases:
-            raise ValueError("phases must be a non-empty list")
-
-        phases: list[PdfPhaseReference] = []
-        for index, raw_phase in enumerate(raw_phases):
-            field = f"phases[{index}]"
-            if not isinstance(raw_phase, dict):
-                raise ValueError(f"{field} must be an object")
-            _require_exact_fields(
-                raw_phase,
-                _PHASE_FIELDS,
-                _PHASE_REQUIRED_FIELDS,
-                field,
-            )
-            name = raw_phase["name"]
-            if not isinstance(name, str):
-                raise ValueError(f"{field}.name must be a string")
-            minimize = raw_phase["minimize"]
-            if not isinstance(minimize, bool):
-                raise ValueError(f"{field}.minimize must be a boolean")
-            constraint_profile = raw_phase.get("constraint_profile", "none")
-            if constraint_profile not in {"none", "cs_pb_br3"}:
-                raise ValueError(
-                    f"{field}.constraint_profile is unsupported: {constraint_profile!r}"
-                )
-            gr_path = _reference_path(
-                raw_phase["gr_path"], config_path.parent, f"{field}.gr_path"
-            )
-            cif_value = raw_phase.get("cif_path")
-            cif_path = (
-                None
-                if cif_value is None
-                else _reference_path(
-                    cif_value,
-                    config_path.parent,
-                    f"{field}.cif_path",
-                    require_file=False,
-                )
-            )
-            phases.append(
-                PdfPhaseReference(
-                    name=name,
-                    gr_path=gr_path,
-                    cif_path=cif_path,
-                    minimize=minimize,
-                    constraint_profile=constraint_profile,
-                )
-            )
-        return cls(tuple(phases))
+    reference_type: str = "quinine"
+    excitation_wavelength_nm: float = 365.0
+    absorbance: float = 0.06
+    pl_integral: float = 1.2e6
+    refractive_index: float = 1.33
+    plqy: float = 0.546
+    solvent_refractive_index: float = 1.506
 
 
 def _require_exact_fields(
@@ -178,7 +70,6 @@ def _require_exact_fields(
     required: frozenset[str],
     field: str,
 ) -> None:
-    """Reject unknown and missing JSON object fields."""
     unknown = sorted(value.keys() - allowed)
     if unknown:
         raise ValueError(f"{field} has unknown fields: {', '.join(unknown)}")
@@ -192,9 +83,8 @@ def _reference_path(
     config_directory: Path,
     field: str,
     *,
-    require_file: bool = True,
+    require_file: bool,
 ) -> Path:
-    """Validate and resolve one configured filesystem path."""
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty path string")
     candidate = Path(value).expanduser()
@@ -205,18 +95,90 @@ def _reference_path(
     return candidate
 
 
-QEProFields = tuple[str, ...]
-QEPRO_FIELDS: QEProFields = (
-    "QEPro_x_axis",
-    "QEPro_output",
-    "QEPro_sample",
-    "QEPro_dark",
-    "QEPro_reference",
-    "QEPro_spectrum_type",
-    "QEPro_integration_time",
-    "QEPro_num_spectra",
-    "QEPro_buff_capacity",
-)
+def _load_pdf_references(path: str | Path) -> tuple[_PdfPhaseReference, ...]:
+    """Load and validate version-1 external PDF phase references."""
+    config_path = Path(path).expanduser().resolve()
+    try:
+        document = json.loads(config_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON in {config_path}: {exc.msg}") from exc
+
+    if not isinstance(document, dict):
+        raise ValueError(f"configuration root must be an object: {config_path}")
+    _require_exact_fields(document, _ROOT_FIELDS, _ROOT_FIELDS, "configuration")
+    if type(document["schema_version"]) is not int:
+        raise ValueError("schema_version must be the integer 1")
+    if document["schema_version"] != 1:
+        raise ValueError(
+            f"schema_version is unsupported: {document['schema_version']!r}"
+        )
+
+    raw_phases = document["phases"]
+    if not isinstance(raw_phases, list) or not raw_phases:
+        raise ValueError("phases must be a non-empty list")
+
+    names: set[str] = set()
+    phases: list[_PdfPhaseReference] = []
+    for index, raw_phase in enumerate(raw_phases):
+        field = f"phases[{index}]"
+        if not isinstance(raw_phase, dict):
+            raise ValueError(f"{field} must be an object")
+        _require_exact_fields(
+            raw_phase,
+            _PHASE_FIELDS,
+            _PHASE_REQUIRED_FIELDS,
+            field,
+        )
+
+        name = raw_phase["name"]
+        if not isinstance(name, str):
+            raise ValueError(f"{field}.name must be a string")
+        if not _PHASE_NAME.fullmatch(name):
+            raise ValueError(
+                f"{field}.name must match {_PHASE_NAME.pattern!r}: {name!r}"
+            )
+        if name in names:
+            raise ValueError(f"{field}.name is duplicated: {name!r}")
+        names.add(name)
+
+        minimize = raw_phase["minimize"]
+        if not isinstance(minimize, bool):
+            raise ValueError(f"{field}.minimize must be a boolean")
+        constraint_profile = raw_phase.get("constraint_profile", "none")
+        if constraint_profile not in {"none", "cs_pb_br3"}:
+            raise ValueError(
+                f"{field}.constraint_profile is unsupported: {constraint_profile!r}"
+            )
+
+        gr_path = _reference_path(
+            raw_phase["gr_path"],
+            config_path.parent,
+            f"{field}.gr_path",
+            require_file=True,
+        )
+        cif_value = raw_phase.get("cif_path")
+        cif_path = (
+            None
+            if cif_value is None
+            else _reference_path(
+                cif_value,
+                config_path.parent,
+                f"{field}.cif_path",
+                require_file=False,
+            )
+        )
+        phases.append(
+            _PdfPhaseReference(
+                name=name,
+                gr_path=gr_path,
+                minimize=minimize,
+                cif_path=cif_path,
+                constraint_profile=cast(
+                    Literal["none", "cs_pb_br3"], constraint_profile
+                ),
+            )
+        )
+    return tuple(phases)
 
 
 class _TiledAccessError(RuntimeError):
@@ -226,7 +188,6 @@ class _TiledAccessError(RuntimeError):
 def _read_stream_dataset(
     client: Any, uid: Hashable, stream_name: str
 ) -> tuple[Any, Mapping[str, Any]]:
-    """Read one stream while distinguishing access from schema failures."""
     try:
         run = client[uid]
         dataset = run[stream_name].read()
@@ -238,20 +199,21 @@ def _read_stream_dataset(
     return dataset, metadata
 
 
-def read_qepro_stream(
+def _read_qepro_stream(
     client: Any,
     uid: Hashable,
     stream_name: str,
 ) -> tuple[dict[str, np.ndarray], Mapping[str, Any]]:
-    """Read one QEPro stream and return its nine fields plus start metadata."""
     dataset, metadata = _read_stream_dataset(client, uid, stream_name)
-    missing = [field for field in QEPRO_FIELDS if field not in dataset]
+    missing = [field for field in _QEPRO_FIELDS if field not in dataset]
     if missing:
         raise ValueError(
             f"QEPro stream {stream_name!r} is missing fields: {', '.join(missing)}"
         )
-    values = {field: np.asarray(dataset[field].values) for field in QEPRO_FIELDS}
-    return values, metadata
+    return (
+        {field: np.asarray(dataset[field].values) for field in _QEPRO_FIELDS},
+        metadata,
+    )
 
 
 def _write_oxidation_free_cif(cif_path: Path, output_directory: Path) -> Path:
@@ -265,12 +227,7 @@ def _write_oxidation_free_cif(cif_path: Path, output_directory: Path) -> Path:
     return output_path
 
 
-def _set_cs_pb_br3_constraints(
-    pdf_fit: Any,
-    *,
-    phase_index: int = 1,
-    fix_apd: bool = True,
-) -> None:
+def _set_cs_pb_br3_constraints(pdf_fit: Any, *, phase_index: int = 1) -> None:
     """Apply the established CsPbBr3 pdffit2 constraints."""
     pdf_fit.setphase(phase_index)
     for axis, parameter in enumerate((11, 12, 13), start=1):
@@ -296,16 +253,7 @@ def _set_cs_pb_br3_constraints(
             pdf_fit.constrain(pdf_fit.u22(atom_index), f"@{parameter}")
             pdf_fit.constrain(pdf_fit.u33(atom_index), f"@{parameter}")
         pdf_fit.setpar(parameter, value)
-        if fix_apd:
-            pdf_fit.fixpar(parameter)
-
-
-DEFAULT_TILED_PROFILE = "xpd"
-DEFAULT_SANDBOX_URI = "https://tiled.nsls2.bnl.gov"
-SANDBOX_CATALOG = "xpd/sandbox"
-DEFAULT_PLQY_PARAMS = (1, "quinine", 365, 0.06, 1.2e6, 1.33, 0.546)
-
-logger = logging.getLogger(__name__)
+        pdf_fit.fixpar(parameter)
 
 
 class XrayUvvisEvaluation:
@@ -315,54 +263,90 @@ class XrayUvvisEvaluation:
         self,
         tiled_client: Any,
         sandbox_client: Any,
-        plqy_params: Sequence[float | str],
-        pdf_references: PdfReferenceConfig,
+        pdf_references: str | Path,
         *,
-        key_height: float = 200,
-        distance: int = 100,
-        height: float = 50,
-        percent_range_pl: tuple[float, float] = (40, 100),
-        percent_range_abs: tuple[float, float] = (10, 70),
+        pdf_mode: Literal["raw", "fit"] = "fit",
+        plqy: PlqyReference = PlqyReference(),  # ruff:ignore[function-call-in-default-argument]
         peak_target: float = 660,
-        pdf_fit_config: PdfFitConfig | None = None,
         max_retries: int = 10,
         retry_delay: float = 2.0,
-        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        self.tiled_client = tiled_client
-        self.sandbox_client = sandbox_client
-        self.plqy_params = tuple(plqy_params)
-        self.pdf_references = pdf_references
-        self.key_height = key_height
-        self.distance = distance
-        self.height = height
-        self.percent_range_pl = percent_range_pl
-        self.percent_range_abs = percent_range_abs
-        self.peak_target = peak_target
-        self.pdf_fit_config = pdf_fit_config or PdfFitConfig()
+        if pdf_mode not in {"raw", "fit"}:
+            raise ValueError("pdf_mode must be either 'raw' or 'fit'")
         if max_retries < 1:
             raise ValueError("max_retries must be at least one")
         if retry_delay < 0:
             raise ValueError("retry_delay cannot be negative")
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        self.sleep = sleep
-        self._validate_fit_references()
 
-    def _validate_fit_references(self) -> None:
-        """Require one existing CIF per phase when PDF fitting is enabled."""
-        if self.pdf_fit_config.mode is PdfEvaluationMode.RAW_ONLY:
-            return
-        for phase in self.pdf_references.phases:
-            if phase.cif_path is None:
-                raise ValueError(
-                    f"phase {phase.name!r} requires cif_path for "
-                    f"PDF mode {PdfEvaluationMode(self.pdf_fit_config.mode).value!r}"
+        phases = _load_pdf_references(pdf_references)
+        if pdf_mode == "fit":
+            for phase in phases:
+                if phase.cif_path is None:
+                    raise ValueError(
+                        f"phase {phase.name!r} requires cif_path for PDF mode 'fit'"
+                    )
+                if not phase.cif_path.is_file():
+                    raise ValueError(
+                        f"phase {phase.name!r} cif_path is not a file: {phase.cif_path}"
+                    )
+
+        self.tiled_client = tiled_client
+        self.sandbox_client = sandbox_client
+        self._pdf_mode: Literal["raw", "fit"] = pdf_mode
+        self._phases = phases
+        self._plqy = plqy
+        self._peak_target = peak_target
+        self._max_retries = max_retries
+        self._retry_delay = retry_delay
+
+    @property
+    def pdf_mode(self) -> Literal["raw", "fit"]:
+        """PDF metrics used as optimization objectives."""
+        return self._pdf_mode
+
+    @property
+    def phases(self) -> tuple[_PdfPhaseReference, ...]:
+        """Validated PDF phase references in configured order."""
+        return self._phases
+
+    @property
+    def peak_target(self) -> float:
+        """Target fluorescence peak wavelength in nanometers."""
+        return self._peak_target
+
+    def _retry_access(
+        self,
+        uid: Hashable,
+        operation: str,
+        read: Callable[[], _T | None],
+        missing: Callable[[], Sequence[str]],
+    ) -> _T:
+        last_access_error: BaseException | None = None
+        for attempt in range(self._max_retries):
+            try:
+                result = read()
+            except _TiledAccessError as exc:
+                last_access_error = exc.__cause__ or exc
+                logger.warning(
+                    "Failed to read %s for uid=%r (attempt %d/%d): %r",
+                    operation,
+                    uid,
+                    attempt + 1,
+                    self._max_retries,
+                    last_access_error,
                 )
-            if not phase.cif_path.is_file():
-                raise ValueError(
-                    f"phase {phase.name!r} cif_path is not a file: {phase.cif_path}"
-                )
+            else:
+                if result is not None:
+                    return result
+            if attempt + 1 < self._max_retries:
+                time.sleep(self._retry_delay)
+
+        missing_items = tuple(missing())
+        suffix = f" Missing: {', '.join(missing_items)}." if missing_items else ""
+        raise RuntimeError(
+            f"Failed to read {operation} for uid={uid!r} after "
+            f"{self._max_retries} attempts.{suffix}"
+        ) from last_access_error
 
     def _read_tiled_data(
         self, uid: Hashable
@@ -373,98 +357,75 @@ class XrayUvvisEvaluation:
         list[dict[str, Any]] | None,
     ]:
         """Read required raw streams, retaining successes between retries."""
-        fluorescence: dict[str, np.ndarray] | None = None
-        absorbance: dict[str, np.ndarray] | None = None
-        metadata: Mapping[str, Any] | None = None
-        quality: list[dict[str, Any]] | None = None
-        use_good_bad: bool | None = None
-        last_access_error: BaseException | None = None
+        state: dict[str, Any] = {}
 
-        for attempt in range(self.max_retries):
-            if fluorescence is None:
+        def read() -> (
+            tuple[
+                dict[str, np.ndarray],
+                dict[str, np.ndarray],
+                Mapping[str, Any],
+                list[dict[str, Any]] | None,
+            ]
+            | None
+        ):
+            errors: list[_TiledAccessError] = []
+            for key, stream_name in (
+                ("fluorescence", "fluorescence"),
+                ("absorbance", "absorbance"),
+            ):
+                if key in state:
+                    continue
                 try:
-                    fluorescence, metadata = read_qepro_stream(
-                        self.tiled_client, uid, "fluorescence"
+                    values, metadata = _read_qepro_stream(
+                        self.tiled_client, uid, stream_name
                     )
-                    use_good_bad = bool(metadata.get("use_good_bad", False))
                 except _TiledAccessError as exc:
-                    last_access_error = exc.__cause__ or exc
-                    logger.warning(
-                        "Failed to read fluorescence stream for uid=%r "
-                        "(attempt %d/%d): %r",
-                        uid,
-                        attempt + 1,
-                        self.max_retries,
-                        last_access_error,
-                    )
+                    errors.append(exc)
+                else:
+                    state[key] = values
+                    state.setdefault("metadata", metadata)
 
-            if absorbance is None:
+            metadata = state.get("metadata")
+            if metadata is not None:
+                state["use_good_bad"] = bool(metadata.get("use_good_bad", False))
+            if state.get("use_good_bad") and "quality" not in state:
                 try:
-                    absorbance, absorbance_metadata = read_qepro_stream(
-                        self.tiled_client, uid, "absorbance"
-                    )
-                    if metadata is None:
-                        metadata = absorbance_metadata
-                        use_good_bad = bool(metadata.get("use_good_bad", False))
+                    state["quality"] = self._read_quality_stream(uid)
                 except _TiledAccessError as exc:
-                    last_access_error = exc.__cause__ or exc
-                    logger.warning(
-                        "Failed to read absorbance stream for uid=%r "
-                        "(attempt %d/%d): %r",
-                        uid,
-                        attempt + 1,
-                        self.max_retries,
-                        last_access_error,
-                    )
+                    errors.append(exc)
 
-            if use_good_bad and quality is None:
-                try:
-                    quality = self._read_quality_stream(uid)
-                except _TiledAccessError as exc:
-                    last_access_error = exc.__cause__ or exc
-                    logger.warning(
-                        "Failed to read fluorescence_quality stream for uid=%r "
-                        "(attempt %d/%d): %r",
-                        uid,
-                        attempt + 1,
-                        self.max_retries,
-                        last_access_error,
-                    )
-
-            ready = (
-                fluorescence is not None
-                and absorbance is not None
-                and metadata is not None
-                and use_good_bad is not None
-                and (not use_good_bad or quality is not None)
-            )
-            if ready:
+            if (
+                "fluorescence" in state
+                and "absorbance" in state
+                and "metadata" in state
+                and "use_good_bad" in state
+                and (not state["use_good_bad"] or "quality" in state)
+            ):
                 return (
-                    cast(dict[str, np.ndarray], fluorescence),
-                    cast(dict[str, np.ndarray], absorbance),
-                    cast(Mapping[str, Any], metadata),
-                    quality,
+                    state["fluorescence"],
+                    state["absorbance"],
+                    state["metadata"],
+                    state.get("quality"),
                 )
-            if attempt + 1 < self.max_retries:
-                self.sleep(self.retry_delay)
+            if errors:
+                raise errors[-1]
+            return None
 
-        missing: list[str] = []
-        if metadata is None or use_good_bad is None:
-            missing.append("run metadata")
-        if fluorescence is None:
-            missing.append("fluorescence stream")
-        if absorbance is None:
-            missing.append("absorbance stream")
-        if use_good_bad and quality is None:
-            missing.append("fluorescence_quality stream")
-        message = (
-            f"Failed to read required Tiled data for uid={uid!r} after "
-            f"{self.max_retries} attempts. Missing: {', '.join(missing)}."
-        )
-        raise RuntimeError(message) from last_access_error
+        def missing() -> list[str]:
+            names: list[str] = []
+            if "metadata" not in state:
+                names.append("run metadata")
+            if "fluorescence" not in state:
+                names.append("fluorescence stream")
+            if "absorbance" not in state:
+                names.append("absorbance stream")
+            if state.get("use_good_bad") and "quality" not in state:
+                names.append("fluorescence_quality stream")
+            return names
+
+        return self._retry_access(uid, "required Tiled data", read, missing)
 
     def _read_quality_stream(self, uid: Hashable) -> list[dict[str, Any]]:
-        """Read and convert the per-batch fluorescence quality stream."""
         dataset, _ = _read_stream_dataset(
             self.tiled_client, uid, "fluorescence_quality"
         )
@@ -485,12 +446,11 @@ class XrayUvvisEvaluation:
             for verdict, count in zip(verdicts, counts, strict=True)
         ]
 
+    @staticmethod
     def _filter_fl_to_good_batches(
-        self,
         fluorescence: dict[str, np.ndarray],
         batch_info: Sequence[Mapping[str, Any]],
     ) -> dict[str, np.ndarray]:
-        """Keep events from batches whose verdict is exactly ``good``."""
         output = np.asarray(fluorescence["QEPro_output"])
         event_count = 1 if output.ndim == 1 else output.shape[0]
         counts = [int(batch["n_events_in_batch"]) for batch in batch_info]
@@ -520,155 +480,47 @@ class XrayUvvisEvaluation:
             indices.size,
             event_count,
         )
-        filtered: dict[str, np.ndarray] = {}
-        for field, values in fluorescence.items():
-            array = np.asarray(values)
-            filtered[field] = (
-                array[indices]
-                if array.ndim >= 1 and array.shape[0] == event_count
-                else array
-            )
-        return filtered
-
-    def _process_pl(
-        self, fluorescence: Mapping[str, np.ndarray]
-    ) -> tuple[float, float, float, float, bool]:
-        """Classify all events, average selected good spectra, and fit one peak."""
-        intensities = np.asarray(fluorescence["QEPro_output"], dtype=float)
-        wavelengths = np.asarray(fluorescence["QEPro_x_axis"], dtype=float)
-        if intensities.ndim == 1:
-            intensities = intensities[np.newaxis, :]
-        if wavelengths.ndim == 1:
-            wavelengths = np.broadcast_to(wavelengths, intensities.shape)
-        if intensities.ndim != 2 or wavelengths.shape != intensities.shape:
-            raise ValueError(
-                "QEPro_x_axis and QEPro_output must contain aligned spectra"
-            )
-
-        good_indices = [
-            index
-            for index, (x_row, y_row) in enumerate(
-                zip(wavelengths, intensities, strict=True)
-            )
-            if classify_pl(
-                x_row,
-                y_row,
-                key_height=self.key_height,
-                distance=self.distance,
-                height=self.height,
-            ).is_good
-        ]
-        if not good_indices:
-            return 0.0, 1000.0, 0.0, 0.0, False
-
-        good_wavelengths = wavelengths[good_indices]
-        good_spectra = intensities[good_indices]
-        selected = select_pl_spectra(
-            good_wavelengths,
-            good_spectra,
-            percent_range=self.percent_range_pl,
-        )
-        averaged = np.mean(selected, axis=0)
-        fit_wavelength = good_wavelengths[0]
-        classification = classify_pl(
-            fit_wavelength,
-            averaged,
-            key_height=self.key_height,
-            distance=self.distance,
-            height=self.height,
-        )
-        if not classification.is_good:
-            return 0.0, 1000.0, 0.0, 0.0, False
-        peak, fwhm, integral, r_squared = fit_pl_spectrum(
-            fit_wavelength,
-            averaged,
-            classification,
-        )
-        return peak, fwhm, integral, r_squared, True
-
-    def _process_absorbance(
-        self, absorbance: Mapping[str, np.ndarray]
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Percentile-filter and baseline-correct absorbance spectra."""
-        return correct_absorbance(
-            absorbance["QEPro_x_axis"],
-            absorbance["QEPro_output"],
-            percent_range=self.percent_range_abs,
-        )
-
-    def _compute_plqy(
-        self,
-        absorbance: np.ndarray,
-        wavelength: np.ndarray,
-        pl_integral: float,
-    ) -> float:
-        """Calculate PLQY at the configured excitation wavelength."""
-        if len(self.plqy_params) != 7:
-            raise ValueError("plqy_params must contain exactly seven values")
-        (
-            _,
-            reference_type,
-            excitation_wavelength,
-            absorbance_reference,
-            pl_integral_reference,
-            refractive_index_reference,
-            plqy_reference,
-        ) = self.plqy_params
-        excitation_index = int(
-            np.abs(wavelength - float(excitation_wavelength)).argmin()
-        )
-        return calculate_plqy(
-            float(absorbance[excitation_index]),
-            pl_integral,
-            1.506,
-            reference_type=str(reference_type),
-            absorbance_reference=float(absorbance_reference),
-            pl_integral_reference=float(pl_integral_reference),
-            refractive_index_reference=float(refractive_index_reference),
-            plqy_reference=float(plqy_reference),
-        )
+        return {
+            field: array[indices]
+            if (array := np.asarray(values)).ndim >= 1 and array.shape[0] == event_count
+            else array
+            for field, values in fluorescence.items()
+        }
 
     def _read_pdfstream_data(self, uid: Hashable) -> dict[str, np.ndarray]:
         """Read the correlated pdfstream G(r) stream with bounded retries."""
-        last_access_error: BaseException | None = None
-        for attempt in range(self.max_retries):
+
+        def read() -> dict[str, np.ndarray]:
             try:
                 matches = self.sandbox_client.search(Eq("start.original_run_uid", uid))
                 key = matches.keys().last()
                 dataset = matches[key]["scattering"].read()
             except Exception as exc:
-                last_access_error = exc
-                logger.warning(
-                    "Failed to read pdfstream data for uid=%r (attempt %d/%d): %r",
-                    uid,
-                    attempt + 1,
-                    self.max_retries,
-                    exc,
+                raise _TiledAccessError(
+                    f"failed to read pdfstream data for uid={uid!r}"
+                ) from exc
+            missing = [field for field in ("gr_r", "gr_G") if field not in dataset]
+            if missing:
+                raise ValueError(
+                    "scattering stream is missing fields: " + ", ".join(missing)
                 )
-            else:
-                missing = [field for field in ("gr_r", "gr_G") if field not in dataset]
-                if missing:
-                    raise ValueError(
-                        "scattering stream is missing fields: " + ", ".join(missing)
-                    )
-                return {
-                    field: np.asarray(dataset[field].values).squeeze()
-                    for field in ("gr_r", "gr_G")
-                }
-            if attempt + 1 < self.max_retries:
-                self.sleep(self.retry_delay)
+            return {
+                field: np.asarray(dataset[field].values).squeeze()
+                for field in ("gr_r", "gr_G")
+            }
 
-        raise RuntimeError(
-            "Could not read pdfstream scattering data with "
-            f"original_run_uid={uid!r} after {self.max_retries} attempts."
-        ) from last_access_error
+        return self._retry_access(
+            uid,
+            "pdfstream scattering data",
+            read,
+            lambda: ("scattering stream",),
+        )
 
     def _raw_pdf_correlations(
         self, pdf_data: Mapping[str, np.ndarray]
     ) -> dict[str, float]:
-        """Compute one raw G(r) correlation per configured phase."""
         results: dict[str, float] = {}
-        for phase in self.pdf_references.phases:
+        for phase in self._phases:
             reference_r, reference_g = np.loadtxt(
                 phase.gr_path,
                 usecols=(0, 1),
@@ -695,15 +547,12 @@ class XrayUvvisEvaluation:
         if np.count_nonzero(finite) < 2:
             raise ValueError("not enough finite PDF points to fit G(r)")
 
-        fit_rmax = min(
-            self.pdf_fit_config.rmax,
-            float(np.max(experimental_r[finite])),
-        )
-        if fit_rmax <= 2.5:
+        fit_rmax = min(_PDF_RMAX, float(np.max(experimental_r[finite])))
+        if fit_rmax <= _PDF_RMIN:
             raise ValueError(
-                f"PDF fit rmax must be greater than 2.5 A; measured rmax is {fit_rmax}"
+                f"PDF fit rmax must be greater than {_PDF_RMIN} A; "
+                f"measured rmax is {fit_rmax}"
             )
-        fit_config = replace(self.pdf_fit_config, rmax=fit_rmax)
 
         results: dict[str, float] = {}
         with TemporaryDirectory() as directory:
@@ -714,9 +563,9 @@ class XrayUvvisEvaluation:
                 np.column_stack((experimental_r[finite], experimental_g[finite])),
                 fmt="%.10g %.10g",
             )
-            for phase in self.pdf_references.phases:
+            for phase in self._phases:
                 if phase.cif_path is None:
-                    raise ValueError(f"phase {phase.name!r} requires cif_path")
+                    raise RuntimeError(f"phase {phase.name!r} has no CIF path")
                 clean_cif = _write_oxidation_free_cif(phase.cif_path, output_directory)
                 structure = loadStructure(str(clean_cif))
                 structure.Uisoequiv = 0.04
@@ -726,21 +575,18 @@ class XrayUvvisEvaluation:
                 pdf_fit.read_data(
                     str(measured_path),
                     "X",
-                    fit_config.qmax,
-                    fit_config.qdamp,
+                    _PDF_QMAX,
+                    _PDF_QDAMP,
                 )
                 pdf_fit.add_structure(structure)
                 if phase.constraint_profile == "cs_pb_br3":
-                    _set_cs_pb_br3_constraints(
-                        pdf_fit,
-                        fix_apd=fit_config.fix_apd,
-                    )
+                    _set_cs_pb_br3_constraints(pdf_fit)
                 pdf_fit.constrain(pdf_fit.dscale, "@902")
                 pdf_fit.setpar(902, 1.0)
-                pdf_fit.setvar(pdf_fit.qdamp, fit_config.qdamp)
-                pdf_fit.setvar(pdf_fit.qbroad, fit_config.qbroad)
-                pdf_fit.pdfrange(1, 2.5, fit_config.rmax)
-                pdf_fit.refine(toler=fit_config.toler)
+                pdf_fit.setvar(pdf_fit.qdamp, _PDF_QDAMP)
+                pdf_fit.setvar(pdf_fit.qbroad, _PDF_QBROAD)
+                pdf_fit.pdfrange(1, _PDF_RMIN, fit_rmax)
+                pdf_fit.refine(toler=_PDF_TOLERANCE)
                 results[f"pdf_fit_corr_{phase.name}"] = pearson_profile(
                     experimental_r,
                     experimental_g,
@@ -755,20 +601,13 @@ class XrayUvvisEvaluation:
         *,
         uid: Hashable,
     ) -> dict[str, float]:
-        """Compute PDF metrics using the configured fitting failure policy."""
         results = self._raw_pdf_correlations(pdf_data)
-        if self.pdf_fit_config.mode is PdfEvaluationMode.RAW_ONLY:
+        if self._pdf_mode == "raw":
             return results
         try:
             results.update(self._fit_pdf_correlations(pdf_data))
         except Exception as exc:
-            if self.pdf_fit_config.mode is PdfEvaluationMode.PDF_FIT_OBJECTIVES:
-                raise RuntimeError(f"PDF fitting failed for uid={uid!r}") from exc
-            logger.warning(
-                "PDF fitting failed for uid=%r; returning raw metrics only",
-                uid,
-                exc_info=True,
-            )
+            raise RuntimeError(f"PDF fitting failed for uid={uid!r}") from exc
         return results
 
     def __call__(
@@ -784,24 +623,39 @@ class XrayUvvisEvaluation:
                 batch_info,
             )
 
-        peak, fwhm, pl_integral, _r_squared, has_peak = self._process_pl(fluorescence)
-        wavelength, corrected_absorbance = self._process_absorbance(absorbance)
-        if has_peak:
+        pl_result = analyze_pl_spectra(
+            fluorescence["QEPro_x_axis"], fluorescence["QEPro_output"]
+        )
+        wavelength, corrected_absorbance = correct_absorbance(
+            absorbance["QEPro_x_axis"], absorbance["QEPro_output"]
+        )
+        if pl_result is None:
+            peak = 0.0
+            peak_distance = self._peak_target
+            fwhm = 1000.0
+            plqy = 1e-10
+        else:
+            peak, fwhm, pl_integral, _r_squared = pl_result
             if not np.isfinite(peak):
                 raise ValueError(f"fitted Peak is not finite for uid={uid!r}")
             if not np.isfinite(fwhm) or fwhm <= 0:
                 raise ValueError(
                     f"fitted FWHM is not positive and finite for uid={uid!r}"
                 )
-            plqy = self._compute_plqy(
-                corrected_absorbance,
-                wavelength,
-                pl_integral,
+            excitation_index = int(
+                np.abs(wavelength - self._plqy.excitation_wavelength_nm).argmin()
             )
-        else:
-            peak = 0.0
-            fwhm = 1000.0
-            plqy = 1e-10
+            plqy = calculate_plqy(
+                float(corrected_absorbance[excitation_index]),
+                pl_integral,
+                self._plqy.solvent_refractive_index,
+                reference_type=self._plqy.reference_type,
+                absorbance_reference=self._plqy.absorbance,
+                pl_integral_reference=self._plqy.pl_integral,
+                refractive_index_reference=self._plqy.refractive_index,
+                plqy_reference=self._plqy.plqy,
+            )
+            peak_distance = abs(self._peak_target - peak)
 
         if not np.isfinite(plqy) or plqy <= 0:
             plqy = 1e-10
@@ -812,7 +666,7 @@ class XrayUvvisEvaluation:
 
         outcomes = {
             "Peak": float(peak),
-            "peak_distance": float(abs(self.peak_target - peak)),
+            "peak_distance": float(peak_distance),
             "log_FWHM": float(np.log(fwhm)),
             "log_PLQY": float(np.log(plqy)),
             **pdf_metrics,

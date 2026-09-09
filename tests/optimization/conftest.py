@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -13,20 +14,21 @@ from ophyd import Component as Cpt
 from ophyd import Device, Signal
 from ophyd.status import DeviceStatus
 
+from xpd_tools.optimization.plans import (
+    DilutionStage,
+    FlowSource,
+    QualityPolicy,
+    WashCycle,
+    XraySettings,
+    XrayUvvisPlanContext,
+)
+
 
 class FakeQEPro(Device):
-    """Classic-Ophyd QEPro substitute with deterministic spectrum playback."""
-
     x_axis = Cpt(Signal, value=np.linspace(200.0, 950.0, 751))
     output = Cpt(Signal, value=np.zeros(751))
-    sample = Cpt(Signal, value=np.zeros(751))
-    dark = Cpt(Signal, value=np.zeros(751))
-    reference = Cpt(Signal, value=np.ones(751))
     spectrum_type = Cpt(Signal, value="Corrected Sample")
     correction = Cpt(Signal, value="Dark")
-    integration_time = Cpt(Signal, value=100)
-    num_spectra = Cpt(Signal, value=1)
-    buff_capacity = Cpt(Signal, value=1)
 
     def __init__(
         self,
@@ -54,8 +56,6 @@ class FakeQEPro(Device):
 
 
 class FakePump(Device):
-    """Classic-Ophyd pump substitute exposing the production plan methods."""
-
     read_infuse_rate = Cpt(Signal, value=0.0)
     read_infuse_rate_unit = Cpt(Signal, value="ul/min")
     status = Cpt(Signal, value="Stopped")
@@ -117,8 +117,6 @@ class FakePump(Device):
 
 
 class FakeAreaDetector(Device):
-    """Minimal staged detector accepted by the X-ray plan path."""
-
     class Cam(Device):
         acquire_time = Cpt(Signal, value=0.1)
 
@@ -139,21 +137,118 @@ class FakeAreaDetector(Device):
         return status
 
 
+class _TiledStream:
+    def __init__(self, data: Mapping[str, Any], *, failures: int = 0) -> None:
+        self.data = {
+            name: SimpleNamespace(values=np.asarray(value))
+            for name, value in data.items()
+        }
+        self.failures = failures
+        self.read_count = 0
+
+    def read(self) -> dict[str, SimpleNamespace]:
+        self.read_count += 1
+        if self.read_count <= self.failures:
+            raise OSError("stream is not ready")
+        return self.data
+
+
+class _TiledRun:
+    def __init__(
+        self,
+        streams: Mapping[str, _TiledStream],
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        use_good_bad: bool = False,
+    ) -> None:
+        self.streams = dict(streams)
+        start = dict(metadata or {})
+        start.setdefault("use_good_bad", use_good_bad)
+        self.metadata = {"start": start}
+
+    def __getitem__(self, name: str) -> _TiledStream:
+        return self.streams[name]
+
+
+class _TiledCatalog:
+    def __init__(
+        self,
+        runs: Mapping[str, _TiledRun],
+        *,
+        search_failures: int = 0,
+    ) -> None:
+        self.runs = dict(runs)
+        self.search_failures = search_failures
+        self.search_count = 0
+
+    def __getitem__(self, uid: Hashable) -> _TiledRun:
+        return self.runs[str(uid)]
+
+    def search(self, query: Any) -> _TiledCatalog:
+        self.search_count += 1
+        if self.search_count <= self.search_failures:
+            raise OSError("catalog is not ready")
+        return self
+
+    def keys(self) -> _TiledCatalog:
+        return self
+
+    def last(self) -> str:
+        return next(reversed(self.runs))
+
+
+def _run_from_documents(
+    documents: Sequence[tuple[str, Mapping[str, Any]]], uid: str
+) -> _TiledRun:
+    start = next(
+        doc for name, doc in documents if name == "start" and doc["uid"] == uid
+    )
+    descriptors = {
+        doc["uid"]: doc["name"]
+        for name, doc in documents
+        if name == "descriptor" and doc["run_start"] == uid
+    }
+    events: dict[str, list[Mapping[str, Any]]] = {
+        stream_name: [] for stream_name in descriptors.values()
+    }
+    for name, doc in documents:
+        if name == "event" and doc["descriptor"] in descriptors:
+            events[descriptors[doc["descriptor"]]].append(doc["data"])
+    streams = {
+        stream_name: _TiledStream(
+            {
+                field: np.asarray([event[field] for event in stream_events])
+                for field in stream_events[0]
+            }
+        )
+        for stream_name, stream_events in events.items()
+        if stream_events
+    }
+    return _TiledRun(streams, metadata=start)
+
+
+@pytest.fixture
+def tiled_fakes() -> SimpleNamespace:
+    return SimpleNamespace(
+        Stream=_TiledStream,
+        Run=_TiledRun,
+        Catalog=_TiledCatalog,
+        run_from_documents=_run_from_documents,
+    )
+
+
 @pytest.fixture
 def wavelength() -> np.ndarray:
-    """A one-nanometer UV-Vis wavelength grid."""
     return np.arange(200.0, 951.0)
 
 
 @pytest.fixture
 def good_spectrum(wavelength: np.ndarray) -> np.ndarray:
-    """A deterministic 660 nm Gaussian PL spectrum."""
     return 5000 * np.exp(-((wavelength - 660) ** 2) / (2 * 20**2))
 
 
 @pytest.fixture
 def bad_spectrum(wavelength: np.ndarray) -> np.ndarray:
-    """A deterministic spectrum below the acquisition quality threshold."""
     return 20 * np.exp(-((wavelength - 630) ** 2) / (2 * 20**2))
 
 
@@ -162,7 +257,6 @@ def fake_qepro(
     wavelength: np.ndarray,
     good_spectrum: np.ndarray,
 ) -> FakeQEPro:
-    """A QEPro initialized with a good deterministic spectrum."""
     device = FakeQEPro(name="QEPro", spectra=[good_spectrum] * 20)
     device.x_axis.put(wavelength)
     device.output.put(good_spectrum)
@@ -171,20 +265,17 @@ def fake_qepro(
 
 @pytest.fixture
 def fake_pumps() -> dict[str, FakePump]:
-    """Pumps used by standard flow, dilution, and wash configurations."""
     names = ("dds2_p1", "dds2_p2", "dds3_p1", "dds1_p1", "ultra2", "ultra1")
     return {name: FakePump(name=name) for name in names}
 
 
 @pytest.fixture
 def fake_area_detector() -> FakeAreaDetector:
-    """A classic-Ophyd area detector for simulated X-ray acquisition."""
     return FakeAreaDetector(name="xray_detector")
 
 
 @pytest.fixture
 def optical_signals() -> tuple[Signal, Signal, Signal]:
-    """LED, UV shutter, and fast-shutter signals."""
     return (
         Signal(name="led", value="Low"),
         Signal(name="uv_shutter", value="Low"),
@@ -194,7 +285,6 @@ def optical_signals() -> tuple[Signal, Signal, Signal]:
 
 @pytest.fixture
 def documents(RE: RunEngine) -> list[tuple[str, dict[str, Any]]]:
-    """Collect documents emitted by the shared RunEngine fixture."""
     collected: list[tuple[str, dict[str, Any]]] = []
     RE.subscribe(lambda name, doc: collected.append((name, doc)))
     return collected
@@ -204,7 +294,6 @@ def documents(RE: RunEngine) -> list[tuple[str, dict[str, Any]]]:
 def reference_config_factory(
     tmp_path: Path,
 ) -> Callable[..., Path]:
-    """Write external version-1 reference JSON and its referenced files."""
 
     def factory(
         phases: Sequence[tuple[str, bool]] = (("Target", False),),
@@ -238,5 +327,65 @@ def reference_config_factory(
         config_path = tmp_path / "references.json"
         config_path.write_text(json.dumps({"schema_version": 1, "phases": payload}))
         return config_path
+
+    return factory
+
+
+@pytest.fixture
+def plan_context_factory(
+    fake_qepro: FakeQEPro,
+    fake_pumps: Mapping[str, FakePump],
+    optical_signals: tuple[Signal, Signal, Signal],
+    fake_area_detector: FakeAreaDetector,
+) -> Callable[..., XrayUvvisPlanContext]:
+    led, uv_shutter, fast_shutter = optical_signals
+    default_quality = QualityPolicy(
+        enabled=False, absorbance_shots=1, fluorescence_shots=1
+    )
+
+    def identity_wrapper(plan: Any, no_dark: bool):
+        return plan
+
+    def factory(
+        *,
+        sources: tuple[FlowSource, ...] | None = None,
+        dilutions: tuple[DilutionStage, ...] = (),
+        wash_cycles: tuple[WashCycle, ...] = (),
+        quality: QualityPolicy | None = None,
+        xray: XraySettings | None = None,
+        mixer_lengths_cm: tuple[float, ...] = (0.0,),
+        residence_time_ratio: float = 0.0,
+        wrap_xray_run: Any = None,
+    ) -> XrayUvvisPlanContext:
+        configured_sources = sources
+        if configured_sources is None:
+            configured_sources = tuple(
+                FlowSource(
+                    dof=f"infusion_rate_{label}",
+                    pump=fake_pumps[pump],
+                    precursor=precursor,
+                    sample_label=label,
+                )
+                for label, pump, precursor in (
+                    ("CsPb", "dds2_p1", "CsPbOA"),
+                    ("Br", "dds2_p2", "TOABr"),
+                    ("I2", "dds3_p1", "ZnI2"),
+                )
+            )
+        return XrayUvvisPlanContext(
+            qepro=fake_qepro,
+            led=led,
+            uv_shutter=uv_shutter,
+            fast_shutter=fast_shutter,
+            xray_detector=fake_area_detector,
+            wrap_xray_run=wrap_xray_run or identity_wrapper,
+            sources=configured_sources,
+            dilutions=dilutions,
+            wash_cycles=wash_cycles,
+            mixer_lengths_cm=mixer_lengths_cm,
+            residence_time_ratio=residence_time_ratio,
+            quality=quality or default_quality,
+            xray=xray or XraySettings(),
+        )
 
     return factory

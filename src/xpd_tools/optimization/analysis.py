@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy import integrate
@@ -11,18 +9,7 @@ from scipy.optimize import curve_fit
 from scipy.signal import find_peaks
 
 
-@dataclass(frozen=True)
-class PLClassification:
-    """Classification and detected non-LED peaks for one PL spectrum."""
-
-    is_good: bool
-    peak_indices: NDArray[np.intp]
-    peak_heights: NDArray[np.float64]
-    peak_wavelength_nm: float
-
-
 def _nearest_index(values: NDArray[np.float64], target: float) -> int:
-    """Return the index whose value is nearest to ``target``."""
     return int(np.abs(values - target).argmin())
 
 
@@ -33,15 +20,8 @@ def classify_pl(
     key_height: float = 2000,
     height: float = 30,
     distance: int = 30,
-    c2_c3: bool = False,
-    threshold: tuple[float, float, float] = (560, 100000, 200000),
-    integration_bounds: tuple[float, float, float] = (340, 400, 800),
-) -> PLClassification:
-    """Classify a fluorescence spectrum using the production PL policy.
-
-    Peaks below 400 nm are treated as LED emission and excluded. The optional
-    integral policy compares the PL-band integral against the LED-band integral.
-    """
+) -> tuple[bool, float]:
+    """Return whether a spectrum has a strong non-LED peak and its wavelength."""
     x = np.asarray(wavelength, dtype=float)
     y = np.asarray(intensity, dtype=float)
     if x.ndim != 1 or y.ndim != 1 or x.shape != y.shape:
@@ -49,42 +29,19 @@ def classify_pl(
 
     peaks, properties = find_peaks(y, height=height, distance=distance)
     pl_mask = x[peaks] >= 400
-    pl_peaks = np.asarray(peaks[pl_mask], dtype=np.intp)
-    pl_heights = np.asarray(properties["peak_heights"][pl_mask], dtype=float)
+    pl_peaks = peaks[pl_mask]
     if pl_peaks.size == 0:
-        return PLClassification(False, pl_peaks, pl_heights, float("nan"))
+        return False, float("nan")
 
-    top = int(np.argmax(pl_heights))
-    top_intensity = float(pl_heights[top])
-    top_wavelength = float(x[pl_peaks[top]])
-    is_good = top_intensity >= key_height
-
-    if is_good and c2_c3:
-        led_start, pl_start, pl_end = (
-            _nearest_index(x, bound) for bound in integration_bounds
-        )
-        led_integral = float(integrate.simpson(y[led_start:pl_start]))
-        pl_integral = float(integrate.simpson(y[pl_start:pl_end]))
-        peak_difference = pl_integral - led_integral
-        split_wavelength, low_threshold, high_threshold = threshold
-        if top_wavelength < split_wavelength:
-            is_good = peak_difference >= low_threshold
-        elif top_wavelength > split_wavelength:
-            is_good = peak_difference >= high_threshold
-
-    return PLClassification(
-        is_good,
-        pl_peaks,
-        pl_heights,
-        top_wavelength,
-    )
+    pl_heights = properties["peak_heights"][pl_mask]
+    strongest = int(np.argmax(pl_heights))
+    return bool(pl_heights[strongest] >= key_height), float(x[pl_peaks[strongest]])
 
 
 def _prepare_spectra(
     wavelength: ArrayLike,
     spectra: ArrayLike,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Return wavelength rows and a two-dimensional spectra array."""
     values = np.asarray(spectra, dtype=float)
     if values.ndim == 1:
         values = values[np.newaxis, :]
@@ -106,14 +63,13 @@ def _prepare_spectra(
 
 
 def _select_spectra(
-    wavelength: ArrayLike,
-    spectra: ArrayLike,
+    wavelengths: NDArray[np.float64],
+    spectra: NDArray[np.float64],
     wavelength_range: tuple[float, float],
     percent_range: tuple[float, float],
     *,
     weighted: bool,
-) -> NDArray[np.float64]:
-    """Select spectra by inclusive percentiles of a wavelength-window score."""
+) -> NDArray[np.bool_]:
     low_wavelength, high_wavelength = wavelength_range
     low_percent, high_percent = percent_range
     if low_wavelength > high_wavelength:
@@ -121,9 +77,8 @@ def _select_spectra(
     if not 0 <= low_percent <= high_percent <= 100:
         raise ValueError("percent_range must be ordered within [0, 100]")
 
-    wavelengths, values = _prepare_spectra(wavelength, spectra)
-    scores = np.empty(values.shape[0], dtype=float)
-    for index, (x_row, y_row) in enumerate(zip(wavelengths, values, strict=True)):
+    scores = np.empty(spectra.shape[0], dtype=float)
+    for index, (x_row, y_row) in enumerate(zip(wavelengths, spectra, strict=True)):
         mask = (x_row >= low_wavelength) & (x_row <= high_wavelength)
         if not np.any(mask):
             raise ValueError("wavelength_range contains no spectrum samples")
@@ -133,67 +88,23 @@ def _select_spectra(
         )
 
     lower, upper = np.percentile(scores, percent_range)
-    return values[(scores >= lower) & (scores <= upper)]
-
-
-def select_pl_spectra(
-    wavelength: ArrayLike,
-    spectra: ArrayLike,
-    *,
-    wavelength_range: tuple[float, float] = (400, 800),
-    percent_range: tuple[float, float] = (30, 100),
-) -> NDArray[np.float64]:
-    """Select PL events by peak intensity within the configured wavelength window."""
-    return _select_spectra(
-        wavelength,
-        spectra,
-        wavelength_range,
-        percent_range,
-        weighted=False,
-    )
-
-
-def select_absorbance_spectra(
-    wavelength: ArrayLike,
-    spectra: ArrayLike,
-    *,
-    wavelength_range: tuple[float, float] = (210, 700),
-    percent_range: tuple[float, float] = (15, 85),
-) -> NDArray[np.float64]:
-    """Select absorbance events by wavelength-weighted mean intensity."""
-    return _select_spectra(
-        wavelength,
-        spectra,
-        wavelength_range,
-        percent_range,
-        weighted=True,
-    )
+    return (scores >= lower) & (scores <= upper)
 
 
 def _gaussian(
     x: NDArray[np.float64], amplitude: float, center: float, sigma: float
 ) -> NDArray[np.float64]:
-    """Evaluate a one-peak Gaussian profile."""
     return amplitude * np.exp(-((x - center) ** 2) / (2 * sigma**2))
 
 
-def fit_pl_spectrum(
-    wavelength: ArrayLike,
-    intensity: ArrayLike,
-    classification: PLClassification,
+def _fit_pl_spectrum(
+    wavelength: NDArray[np.float64],
+    intensity: NDArray[np.float64],
+    peak_wavelength: float,
 ) -> tuple[float, float, float, float]:
-    """Fit one Gaussian and return peak, FWHM, integral, and coefficient of fit."""
-    if not classification.is_good or classification.peak_indices.size == 0:
-        raise ValueError("a good PL classification with at least one peak is required")
-
-    x_all = np.asarray(wavelength, dtype=float)
-    y_all = np.asarray(intensity, dtype=float)
-    if x_all.ndim != 1 or y_all.ndim != 1 or x_all.shape != y_all.shape:
-        raise ValueError("wavelength and intensity must be equal-length 1D arrays")
-
-    fit_mask = (x_all >= 400) & (x_all <= 800)
-    x = x_all[fit_mask]
-    y = y_all[fit_mask]
+    fit_mask = (wavelength >= 400) & (wavelength <= 800)
+    x = wavelength[fit_mask]
+    y = intensity[fit_mask]
     if x.size < 3:
         raise ValueError("PL fit window must contain at least three samples")
 
@@ -203,9 +114,12 @@ def fit_pl_spectrum(
     mean = float(np.sum(x * y) / total)
     sigma = float(np.sqrt(np.sum(np.abs(y) * (x - mean) ** 2) / total))
 
-    strongest = int(np.argmax(classification.peak_heights))
-    peak_index = int(classification.peak_indices[strongest])
-    initial_guess = [float(y_all[peak_index]), float(x_all[peak_index]), sigma]
+    peak_index = _nearest_index(wavelength, peak_wavelength)
+    initial_guess = [
+        float(intensity[peak_index]),
+        float(wavelength[peak_index]),
+        sigma,
+    ]
     try:
         fitted, _ = curve_fit(
             _gaussian,
@@ -242,12 +156,62 @@ def fit_pl_spectrum(
     return peak, 2.355 * fitted_sigma, pl_integral, r_squared
 
 
+def analyze_pl_spectra(
+    wavelength: ArrayLike,
+    spectra: ArrayLike,
+    *,
+    key_height: float = 200,
+    height: float = 50,
+    distance: int = 100,
+    percent_range: tuple[float, float] = (40, 100),
+) -> tuple[float, float, float, float] | None:
+    """Select valid PL events, average them, and fit their strongest peak."""
+    wavelengths, values = _prepare_spectra(wavelength, spectra)
+    good = np.fromiter(
+        (
+            classify_pl(
+                x_row,
+                y_row,
+                key_height=key_height,
+                height=height,
+                distance=distance,
+            )[0]
+            for x_row, y_row in zip(wavelengths, values, strict=True)
+        ),
+        dtype=bool,
+        count=values.shape[0],
+    )
+    if not np.any(good):
+        return None
+
+    good_wavelengths = wavelengths[good]
+    good_spectra = values[good]
+    selected = _select_spectra(
+        good_wavelengths,
+        good_spectra,
+        (400, 800),
+        percent_range,
+        weighted=False,
+    )
+    fit_wavelength = np.asarray(good_wavelengths[selected][0], dtype=float)
+    averaged = np.mean(good_spectra[selected], axis=0)
+    is_good, peak_wavelength = classify_pl(
+        fit_wavelength,
+        averaged,
+        key_height=key_height,
+        height=height,
+        distance=distance,
+    )
+    if not is_good:
+        return None
+    return _fit_pl_spectrum(fit_wavelength, averaged, peak_wavelength)
+
+
 def _fit_baseline(
     wavelength: NDArray[np.float64],
     absorbance: NDArray[np.float64],
     wavelength_range: tuple[float, float],
 ) -> NDArray[np.float64]:
-    """Fit a line over one baseline wavelength range."""
     start = _nearest_index(wavelength, wavelength_range[0])
     stop = _nearest_index(wavelength, wavelength_range[1])
     if start > stop:
@@ -256,16 +220,7 @@ def _fit_baseline(
     y = absorbance[start:stop]
     if x.size < 2 or x[0] == x[-1]:
         raise ValueError("absorbance baseline range must contain two samples")
-    slope = float((y[-1] - y[0]) / (x[-1] - x[0]))
-    intercept = float(np.mean(y))
-    fitted, _ = curve_fit(
-        lambda values, m, b: values * m + b,
-        x,
-        y,
-        p0=(slope, intercept),
-        maxfev=10000,
-    )
-    return np.asarray(fitted, dtype=float)
+    return np.asarray(np.polyfit(x, y, 1), dtype=float)
 
 
 def correct_absorbance(
@@ -275,14 +230,16 @@ def correct_absorbance(
     percent_range: tuple[float, float] = (10, 70),
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Percentile-filter, average, and baseline-correct absorbance spectra."""
-    wavelengths, _ = _prepare_spectra(wavelength, spectra)
-    selected = select_absorbance_spectra(
-        wavelength,
-        spectra,
-        percent_range=percent_range,
+    wavelengths, values = _prepare_spectra(wavelength, spectra)
+    selected = _select_spectra(
+        wavelengths,
+        values,
+        (210, 700),
+        percent_range,
+        weighted=True,
     )
-    averaged = np.mean(selected, axis=0)
-    x = np.asarray(wavelengths[0], dtype=float)
+    averaged = np.mean(values[selected], axis=0)
+    x = np.asarray(wavelengths[selected][0], dtype=float)
     short_wavelength = _fit_baseline(x, averaged, (205, 240))
     long_wavelength = _fit_baseline(x, averaged, (750, 950))
     baseline = (

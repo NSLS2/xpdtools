@@ -2,135 +2,91 @@ from __future__ import annotations
 
 import json
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pytest
 
-from xpd_tools.optimization.agent import build_objectives
-from xpd_tools.optimization.evaluation import (
-    DEFAULT_PLQY_PARAMS,
-    QEPRO_FIELDS,
-    PdfEvaluationMode,
-    PdfFitConfig,
-    PdfPhaseReference,
-    PdfReferenceConfig,
-    XrayUvvisEvaluation,
-    read_qepro_stream,
-)
+from xpd_tools.optimization.evaluation import XrayUvvisEvaluation
 
 
-@dataclass
-class _Field:
-    values: Any
-
-
-class _Stream:
-    def __init__(self, data: dict[str, Any], *, failures: int = 0) -> None:
-        self.data = data
-        self.failures = failures
-        self.read_count = 0
-
-    def read(self) -> dict[str, Any]:
-        self.read_count += 1
-        if self.read_count <= self.failures:
-            raise OSError("stream is not ready")
-        return self.data
-
-
-class _Run:
-    def __init__(self, streams: dict[str, _Stream], *, use_good_bad: bool = False):
-        self.streams = streams
-        self.metadata = {"start": {"use_good_bad": use_good_bad}}
-
-    def __getitem__(self, name: str) -> _Stream:
-        return self.streams[name]
-
-
-class _RawClient:
-    def __init__(self, run: _Run) -> None:
-        self.run = run
-
-    def __getitem__(self, uid: object) -> _Run:
-        return self.run
-
-
-def _qepro_dataset() -> dict[str, _Field]:
-    return {field: _Field(np.array([1])) for field in QEPRO_FIELDS}
-
-
-def _raw_evaluator(reference_path: Path, raw_client: Any = None) -> XrayUvvisEvaluation:
-    references = PdfReferenceConfig(
-        (PdfPhaseReference("Target", reference_path, False),)
+def _catalogs(
+    tiled: Any,
+    wavelength: np.ndarray,
+    fluorescence: np.ndarray,
+    *,
+    quality: dict[str, Any] | None = None,
+    use_good_bad: bool = False,
+    fluorescence_failures: int = 0,
+    sandbox_failures: int = 0,
+    pdf: tuple[np.ndarray, np.ndarray] | None = None,
+) -> tuple[Any, Any, Any, Any]:
+    absorbance = (
+        0.0001 * wavelength
+        + 0.2
+        + 0.25 * np.exp(-((wavelength - 365) ** 2) / (2 * 12**2))
     )
-    return XrayUvvisEvaluation(
-        raw_client,
-        object(),
-        DEFAULT_PLQY_PARAMS,
-        references,
-        pdf_fit_config=PdfFitConfig(PdfEvaluationMode.RAW_ONLY),
-        max_retries=3,
-        retry_delay=0,
-        sleep=lambda _: None,
+    dataset = lambda values: {  # noqa: E731
+        "QEPro_x_axis": np.broadcast_to(wavelength, np.shape(values)),
+        "QEPro_output": values,
+    }
+    fluorescence_stream = tiled.Stream(
+        dataset(fluorescence), failures=fluorescence_failures
     )
+    absorbance_stream = tiled.Stream(dataset(absorbance))
+    streams = {"fluorescence": fluorescence_stream, "absorbance": absorbance_stream}
+    if quality is not None:
+        streams["fluorescence_quality"] = tiled.Stream(quality)
+    raw = tiled.Catalog({"uid": tiled.Run(streams, use_good_bad=use_good_bad)})
 
-
-def test_reference_config_resolves_external_paths(tmp_path: Path) -> None:
-    relative_gr = tmp_path / "relative.gr"
-    absolute_gr = tmp_path / "absolute.gr"
-    relative_cif = tmp_path / "relative.cif"
-    absolute_cif = tmp_path / "absolute.cif"
-    for path in (relative_gr, absolute_gr, relative_cif, absolute_cif):
-        path.write_text("fixture")
-    config_path = tmp_path / "references.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "phases": [
-                    {
-                        "name": "Wanted",
-                        "gr_path": relative_gr.name,
-                        "cif_path": relative_cif.name,
-                        "minimize": False,
-                    },
-                    {
-                        "name": "Impurity",
-                        "gr_path": str(absolute_gr),
-                        "cif_path": str(absolute_cif),
-                        "minimize": True,
-                    },
-                ],
-            }
-        )
+    radial, profile = pdf or (
+        np.linspace(1.0, 25.0, 241),
+        np.sin(np.linspace(1.0, 25.0, 241)),
     )
+    scattering = tiled.Stream({"gr_r": radial, "gr_G": profile})
+    sandbox = tiled.Catalog(
+        {"sandbox": tiled.Run({"scattering": scattering})},
+        search_failures=sandbox_failures,
+    )
+    return raw, sandbox, fluorescence_stream, absorbance_stream
 
-    config = PdfReferenceConfig.from_json(config_path)
 
-    assert config.phases[0].gr_path == relative_gr
-    assert config.phases[0].cif_path == relative_cif
-    assert config.phases[1].gr_path == absolute_gr
-    assert config.phases[1].cif_path == absolute_cif
-    assert [phase.minimize for phase in config.phases] == [False, True]
-    objectives = build_objectives(PdfFitConfig(), config)
-    assert [(objective.name, objective.minimize) for objective in objectives[-2:]] == [
-        ("pdf_fit_corr_Wanted", False),
-        ("pdf_fit_corr_Impurity", True),
+def _reference_json(path: Path, gr_path: Path, cif_path: Path) -> Path:
+    phase = {
+        "name": "Target",
+        "gr_path": str(gr_path),
+        "cif_path": str(cif_path),
+        "minimize": False,
+    }
+    path.write_text(json.dumps({"schema_version": 1, "phases": [phase]}))
+    return path
+
+
+def test_reference_configuration_resolves_paths_and_modes(
+    tmp_path: Path, reference_config_factory: Any
+) -> None:
+    config_path = reference_config_factory(
+        phases=(("Wanted", False), ("Impurity", True))
+    )
+    evaluator = XrayUvvisEvaluation(object(), object(), config_path)
+
+    assert evaluator.pdf_mode == "fit"
+    assert evaluator.peak_target == 660
+    assert [(phase.name, phase.minimize) for phase in evaluator.phases] == [
+        ("Wanted", False),
+        ("Impurity", True),
     ]
+    assert evaluator.phases[0].gr_path == tmp_path / "Wanted.gr"
+    assert evaluator.phases[0].cif_path == tmp_path / "Wanted.cif"
 
-    duplicate = json.loads(config_path.read_text())
-    duplicate["phases"][1]["name"] = "Wanted"
-    config_path.write_text(json.dumps(duplicate))
-    with pytest.raises(ValueError, match="duplicated"):
-        PdfReferenceConfig.from_json(config_path)
-
-    duplicate["phases"][1]["name"] = "Impurity"
-    duplicate["phases"][0]["gr_path"] = "missing.gr"
-    config_path.write_text(json.dumps(duplicate))
-    with pytest.raises(ValueError, match=r"phases\[0\]\.gr_path.*missing\.gr"):
-        PdfReferenceConfig.from_json(config_path)
+    no_cif = reference_config_factory(include_cif=False)
+    assert (
+        XrayUvvisEvaluation(object(), object(), no_cif, pdf_mode="raw").pdf_mode
+        == "raw"
+    )
+    with pytest.raises(ValueError, match="Target.*cif_path"):
+        XrayUvvisEvaluation(object(), object(), no_cif)
 
 
 @pytest.mark.parametrize(
@@ -144,240 +100,169 @@ def test_reference_config_resolves_external_paths(tmp_path: Path) -> None:
             lambda data: data["phases"][0].update(constraint_profile="unknown"),
             "constraint_profile",
         ),
+        (
+            lambda data: data["phases"].append(dict(data["phases"][0])),
+            "duplicated",
+        ),
+        (lambda data: data["phases"][0].update(gr_path="missing.gr"), "gr_path"),
     ],
 )
-def test_reference_config_rejects_invalid_schema(
-    tmp_path: Path,
-    mutation: Any,
-    message: str,
+def test_reference_configuration_rejects_invalid_schema(
+    reference_config_factory: Any, mutation: Any, message: str
 ) -> None:
-    gr_path = tmp_path / "phase.gr"
-    gr_path.write_text("2 1\n3 2\n")
-    data = {
-        "schema_version": 1,
-        "phases": [{"name": "Phase", "gr_path": "phase.gr", "minimize": False}],
-    }
+    config_path = reference_config_factory(include_cif=False)
+    data = json.loads(config_path.read_text())
     mutation(data)
-    config_path = tmp_path / "references.json"
     config_path.write_text(json.dumps(data))
-
     with pytest.raises(ValueError, match=message):
-        PdfReferenceConfig.from_json(config_path)
+        XrayUvvisEvaluation(object(), object(), config_path, pdf_mode="raw")
 
 
-def test_raw_mode_allows_missing_cif_but_fit_modes_require_it(
-    reference_config_factory: Any,
-) -> None:
-    references = PdfReferenceConfig.from_json(
-        reference_config_factory(include_cif=False)
-    )
-    XrayUvvisEvaluation(
-        object(),
-        object(),
-        DEFAULT_PLQY_PARAMS,
-        references,
-        pdf_fit_config=PdfFitConfig(PdfEvaluationMode.RAW_ONLY),
-    )
-    with pytest.raises(ValueError, match="Target.*cif_path"):
-        XrayUvvisEvaluation(
-            object(),
-            object(),
-            DEFAULT_PLQY_PARAMS,
-            references,
-            pdf_fit_config=PdfFitConfig(PdfEvaluationMode.PDF_FIT_OBJECTIVES),
-        )
-
-
-def test_read_qepro_stream_requires_all_fields(tmp_path: Path) -> None:
-    dataset = _qepro_dataset()
-    run = _Run({"fluorescence": _Stream(dataset)})
-
-    values, metadata = read_qepro_stream(_RawClient(run), "uid", "fluorescence")
-
-    assert tuple(values) == QEPRO_FIELDS
-    assert metadata is run.metadata["start"]
-    dataset.pop("QEPro_dark")
-    with pytest.raises(ValueError, match="QEPro_dark"):
-        read_qepro_stream(_RawClient(run), "uid", "fluorescence")
-
-
-def test_tiled_retries_preserve_successful_reads(tmp_path: Path) -> None:
-    fluorescence = _Stream(_qepro_dataset(), failures=1)
-    absorbance = _Stream(_qepro_dataset())
-    run = _Run({"fluorescence": fluorescence, "absorbance": absorbance})
-    reference = tmp_path / "phase.gr"
-    reference.write_text("2 1\n3 2\n")
-    evaluator = _raw_evaluator(reference, _RawClient(run))
-
-    evaluator._read_tiled_data("uid")
-
-    assert fluorescence.read_count == 2
-    assert absorbance.read_count == 1
-
-
-def test_quality_batches_must_partition_events(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    reference = tmp_path / "phase.gr"
-    reference.write_text("2 1\n3 2\n")
-    evaluator = _raw_evaluator(reference)
-    fluorescence = {"QEPro_output": np.zeros((3, 4)), "other": np.arange(3)}
-
-    with pytest.raises(ValueError, match="exactly partition"):
-        evaluator._filter_fl_to_good_batches(
-            fluorescence,
-            [{"verdict": "good", "n_events_in_batch": 2}],
-        )
-
-    filtered = evaluator._filter_fl_to_good_batches(
-        fluorescence,
-        [
-            {"verdict": "good", "n_events_in_batch": 1},
-            {"verdict": "bad", "n_events_in_batch": 2},
-        ],
-    )
-    np.testing.assert_array_equal(filtered["other"], [0])
-
-    with caplog.at_level("WARNING"):
-        unfiltered = evaluator._filter_fl_to_good_batches(
-            fluorescence,
-            [{"verdict": "BAD", "n_events_in_batch": 3}],
-        )
-    assert unfiltered is fluorescence
-    assert (
-        caplog.messages.count(
-            "No good PL batches found; using all 3 fluorescence events"
-        )
-        == 1
-    )
-
-
-def test_single_shot_pl_includes_event_zero(
-    tmp_path: Path,
+def test_two_field_reads_preserve_successes_across_retries(
+    tiled_fakes: Any,
     wavelength: np.ndarray,
     good_spectrum: np.ndarray,
+    reference_config_factory: Any,
 ) -> None:
-    reference = tmp_path / "phase.gr"
-    reference.write_text("2 1\n3 2\n")
-    evaluator = _raw_evaluator(reference)
+    raw, sandbox, fluorescence, absorbance = _catalogs(
+        tiled_fakes,
+        wavelength,
+        good_spectrum,
+        fluorescence_failures=1,
+        sandbox_failures=1,
+    )
+    evaluator = XrayUvvisEvaluation(
+        raw,
+        sandbox,
+        reference_config_factory(include_cif=False),
+        pdf_mode="raw",
+        max_retries=3,
+        retry_delay=0,
+    )
+    outcome = evaluator("uid", [{"_id": 7}])[0]
 
-    peak, fwhm, integral, r_squared, has_peak = evaluator._process_pl(
-        {
-            "QEPro_x_axis": wavelength[np.newaxis, :],
-            "QEPro_output": good_spectrum[np.newaxis, :],
-        }
+    assert outcome["_id"] == 7
+    assert outcome["corr_Target"] == pytest.approx(1.0)
+    assert (fluorescence.read_count, absorbance.read_count, sandbox.search_count) == (
+        2,
+        1,
+        2,
     )
 
-    assert has_peak
-    assert peak == pytest.approx(660)
-    assert fwhm > 0
-    assert integral > 0
-    assert r_squared > 0.99
 
-
-def test_dynamic_modes_and_fit_failure_policy(tmp_path: Path) -> None:
-    radial = np.linspace(1, 25, 241)
-    profile = np.sin(radial)
-    reference = tmp_path / "phase.gr"
-    np.savetxt(reference, np.column_stack((radial, profile)))
-    cif = tmp_path / "phase.cif"
-    cif.write_text("placeholder")
-    references = PdfReferenceConfig(
-        (PdfPhaseReference("Dynamic", reference, True, cif),)
+def test_schema_errors_are_immediate_and_access_errors_retain_context(
+    tiled_fakes: Any,
+    wavelength: np.ndarray,
+    good_spectrum: np.ndarray,
+    reference_config_factory: Any,
+) -> None:
+    config = reference_config_factory(include_cif=False)
+    raw, sandbox, fluorescence, _ = _catalogs(tiled_fakes, wavelength, good_spectrum)
+    fluorescence.data.pop("QEPro_output")
+    evaluator = XrayUvvisEvaluation(
+        raw, sandbox, config, pdf_mode="raw", max_retries=2, retry_delay=0
     )
-    data = {"gr_r": radial, "gr_G": profile}
+    with pytest.raises(ValueError, match="QEPro_output"):
+        evaluator("uid", [{"_id": 1}])
+    assert fluorescence.read_count == 1
 
-    raw = XrayUvvisEvaluation(
-        object(),
-        object(),
-        DEFAULT_PLQY_PARAMS,
-        references,
-        pdf_fit_config=PdfFitConfig(PdfEvaluationMode.RAW_ONLY),
+    raw, sandbox, fluorescence, _ = _catalogs(tiled_fakes, wavelength, good_spectrum)
+    raw.runs["uid"].streams.pop("absorbance")
+    evaluator = XrayUvvisEvaluation(
+        raw, sandbox, config, pdf_mode="raw", max_retries=2, retry_delay=0
     )
-    assert raw._process_pdf(data, uid="uid") == pytest.approx({"corr_Dynamic": 1.0})
-
-    tracked = XrayUvvisEvaluation(
-        object(),
-        object(),
-        DEFAULT_PLQY_PARAMS,
-        references,
-        pdf_fit_config=PdfFitConfig(PdfEvaluationMode.RAW_OBJECTIVES_PDF_FIT_TRACKED),
-    )
-    tracked_for_patch = cast(Any, tracked)
-    tracked_for_patch._fit_pdf_correlations = lambda pdf_data: (_ for _ in ()).throw(
-        ValueError("fit failed")
-    )
-    assert tracked._process_pdf(data, uid="uid") == pytest.approx({"corr_Dynamic": 1.0})
-
-    strict = XrayUvvisEvaluation(
-        object(),
-        object(),
-        DEFAULT_PLQY_PARAMS,
-        references,
-        pdf_fit_config=PdfFitConfig(PdfEvaluationMode.PDF_FIT_OBJECTIVES),
-    )
-    strict_for_patch = cast(Any, strict)
-    strict_for_patch._fit_pdf_correlations = tracked_for_patch._fit_pdf_correlations
-    with pytest.raises(RuntimeError, match="PDF fitting failed for uid='uid'") as exc:
-        strict._process_pdf(data, uid="uid")
-    assert isinstance(exc.value.__cause__, ValueError)
+    with pytest.raises(RuntimeError, match="Missing: absorbance stream") as exc:
+        evaluator("uid", [{"_id": 1}])
+    assert isinstance(exc.value.__cause__, KeyError)
+    assert fluorescence.read_count == 1
 
 
-def test_no_peak_outcomes_are_finite(tmp_path: Path) -> None:
-    reference = tmp_path / "phase.gr"
-    reference.write_text("2 1\n3 2\n")
-    evaluator = _raw_evaluator(reference)
-    evaluator_for_patch = cast(Any, evaluator)
-    evaluator_for_patch._read_tiled_data = lambda uid: ({}, {}, {}, None)
-    evaluator_for_patch._process_pl = lambda fluorescence: (
-        0.0,
-        1000.0,
-        0.0,
-        0.0,
-        False,
+def test_quality_batches_exactly_partition_and_filter_events(
+    tiled_fakes: Any,
+    wavelength: np.ndarray,
+    good_spectrum: np.ndarray,
+    reference_config_factory: Any,
+) -> None:
+    other_peak = 5000 * np.exp(-((wavelength - 610) ** 2) / (2 * 20**2))
+    quality = {
+        "verdict": np.array(["bad", "good"]),
+        "n_events_in_batch": np.array([1, 1]),
+    }
+    raw, sandbox, _, _ = _catalogs(
+        tiled_fakes,
+        wavelength,
+        np.vstack([other_peak, good_spectrum]),
+        quality=quality,
+        use_good_bad=True,
     )
-    evaluator_for_patch._process_absorbance = lambda absorbance: (
-        np.array([365.0]),
-        np.array([0.0]),
-    )
-    evaluator_for_patch._read_pdfstream_data = lambda uid: {}
-    evaluator_for_patch._process_pdf = lambda pdf_data, *, uid: {"corr_Target": 0.25}
+    config = reference_config_factory(include_cif=False)
+    evaluator = XrayUvvisEvaluation(raw, sandbox, config, pdf_mode="raw")
+    assert evaluator("uid", [{"_id": 2}])[0]["Peak"] == pytest.approx(660)
 
+    quality_stream = raw.runs["uid"].streams["fluorescence_quality"]
+    quality_stream.data["n_events_in_batch"].values = np.array([1, 0])
+    with pytest.raises(ValueError, match="exactly partition"):
+        evaluator("uid", [{"_id": 2}])
+
+
+def test_no_peak_outcomes_are_finite_penalties(
+    tiled_fakes: Any, wavelength: np.ndarray, reference_config_factory: Any
+) -> None:
+    raw, sandbox, _, _ = _catalogs(tiled_fakes, wavelength, np.zeros_like(wavelength))
+    evaluator = XrayUvvisEvaluation(
+        raw,
+        sandbox,
+        reference_config_factory(include_cif=False),
+        pdf_mode="raw",
+        peak_target=650,
+    )
     outcome = evaluator("uid", [{"_id": 7}])[0]
 
     assert outcome["_id"] == 7
     assert outcome["Peak"] == 0.0
-    assert outcome["peak_distance"] == 660.0
+    assert outcome["peak_distance"] == 650
     assert outcome["log_FWHM"] == pytest.approx(np.log(1000.0))
     assert outcome["log_PLQY"] == pytest.approx(np.log(1e-10))
     assert all(np.isfinite(value) for key, value in outcome.items() if key != "_id")
 
 
+def test_fit_failure_wraps_original_error(
+    tmp_path: Path,
+    tiled_fakes: Any,
+    wavelength: np.ndarray,
+    good_spectrum: np.ndarray,
+) -> None:
+    radial = np.linspace(1.0, 25.0, 241)
+    gr_path, cif_path = tmp_path / "phase.gr", tmp_path / "invalid.cif"
+    np.savetxt(gr_path, np.column_stack((radial, np.sin(radial))))
+    cif_path.write_text("not a CIF")
+    config = _reference_json(tmp_path / "references.json", gr_path, cif_path)
+    raw, sandbox, _, _ = _catalogs(tiled_fakes, wavelength, good_spectrum)
+
+    with pytest.raises(RuntimeError, match="PDF fitting failed for uid='uid'") as exc:
+        XrayUvvisEvaluation(raw, sandbox, config)("uid", [{"_id": 3}])
+    assert exc.value.__cause__ is not None
+
+
 @pytest.mark.timeout(60)
-def test_external_target_pdf_fit_is_finite() -> None:
-    fixture_directory = Path(__file__).parent / "fixtures"
-    radial, profile = np.loadtxt(fixture_directory / "target.gr", unpack=True)
-    references = PdfReferenceConfig(
-        (
-            PdfPhaseReference(
-                "Target",
-                fixture_directory / "target.gr",
-                False,
-                fixture_directory / "target.cif",
-            ),
-        )
+def test_external_target_pdf_fit_is_finite(
+    tmp_path: Path,
+    tiled_fakes: Any,
+    wavelength: np.ndarray,
+    good_spectrum: np.ndarray,
+) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    radial, profile = np.loadtxt(fixtures / "target.gr", unpack=True)
+    config = _reference_json(
+        tmp_path / "references.json", fixtures / "target.gr", fixtures / "target.cif"
     )
-    evaluator = XrayUvvisEvaluation(
-        object(),
-        object(),
-        DEFAULT_PLQY_PARAMS,
-        references,
-        pdf_fit_config=PdfFitConfig(rmax=20),
+    raw, sandbox, _, _ = _catalogs(
+        tiled_fakes, wavelength, good_spectrum, pdf=(radial, profile)
     )
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        result = evaluator._fit_pdf_correlations({"gr_r": radial, "gr_G": profile})
+        outcome = XrayUvvisEvaluation(raw, sandbox, config)("uid", [{"_id": 9}])[0]
 
-    assert -1 <= result["pdf_fit_corr_Target"] <= 1
+    assert outcome["corr_Target"] == pytest.approx(1.0)
+    assert -1 <= outcome["pdf_fit_corr_Target"] <= 1

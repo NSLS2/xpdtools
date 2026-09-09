@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import os
@@ -10,21 +11,14 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 from tiled.client import from_profile, from_uri
 
-from .evaluation import (
-    DEFAULT_PLQY_PARAMS,
-    DEFAULT_SANDBOX_URI,
-    DEFAULT_TILED_PROFILE,
-    SANDBOX_CATALOG,
-    PdfEvaluationMode,
-    PdfFitConfig,
-    PdfReferenceConfig,
-    XrayUvvisEvaluation,
-)
+from .evaluation import XrayUvvisEvaluation
 
 logger = logging.getLogger(__name__)
+DEFAULT_TILED_PROFILE = "xpd"
+DEFAULT_SANDBOX_URI = "https://tiled.nsls2.bnl.gov"
+SANDBOX_CATALOG = "xpd/sandbox"
 
 
 def evaluate_uids(
@@ -39,7 +33,7 @@ def evaluate_uids(
             raise ValueError(
                 f"evaluator returned {len(evaluated)} outcomes for uid={uid!r}"
             )
-        outcome = dict(evaluated[0])
+        outcome = {key: value for key, value in evaluated[0].items() if key != "_id"}
         outcome["uid"] = uid
         outcomes.append(outcome)
     return outcomes
@@ -87,9 +81,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--pdf-mode",
-        choices=[mode.value for mode in PdfEvaluationMode],
-        default=PdfEvaluationMode.PDF_FIT_OBJECTIVES.value,
-        help="PDF correlation and fitting mode.",
+        choices=("raw", "fit"),
+        default="fit",
+        help="PDF correlation mode.",
     )
     parser.add_argument("--output", help="Optional CSV output path.")
     return parser
@@ -116,7 +110,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not uids:
         parser.error("at least one UID or --uids-file entry is required")
 
-    references = PdfReferenceConfig.from_json(args.pdf_references)
     raw_client: Any | None = None
     sandbox_root: Any | None = None
     try:
@@ -128,14 +121,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         evaluator = XrayUvvisEvaluation(
             raw_client,
             created_sandbox[SANDBOX_CATALOG],
-            DEFAULT_PLQY_PARAMS,
-            references,
-            pdf_fit_config=PdfFitConfig(args.pdf_mode),
+            args.pdf_references,
+            pdf_mode=args.pdf_mode,
         )
         outcomes = evaluate_uids(uids, evaluator)
         print(json.dumps(outcomes, indent=2, default=float))
         if args.output:
-            pd.DataFrame(outcomes).to_csv(args.output, index=False)
+            with Path(args.output).open("w", newline="") as stream:
+                if outcomes:
+                    writer = csv.DictWriter(stream, fieldnames=outcomes[0])
+                    writer.writeheader()
+                    writer.writerows(outcomes)
             logger.info("Wrote evaluation outcomes to %s", args.output)
         return 0
     finally:

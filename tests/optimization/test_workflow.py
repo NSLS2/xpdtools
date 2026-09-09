@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Hashable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any, cast
 
 import numpy as np
@@ -10,89 +9,8 @@ from bluesky import plan_stubs as bps
 from bluesky.run_engine import RunEngine
 from ophyd import Signal
 
-from xpd_tools.optimization.evaluation import (
-    DEFAULT_PLQY_PARAMS,
-    PdfEvaluationMode,
-    PdfFitConfig,
-    PdfReferenceConfig,
-    XrayUvvisEvaluation,
-)
-from xpd_tools.optimization.plans import XrayUvvisPlanContext, create_xray_uvvis_plan
-
-
-@dataclass
-class _ArrayField:
-    values: Any
-
-
-class _Stream:
-    def __init__(self, data: dict[str, np.ndarray]) -> None:
-        self.data = data
-
-    def read(self) -> dict[str, _ArrayField]:
-        return {name: _ArrayField(values) for name, values in self.data.items()}
-
-
-class _Run:
-    def __init__(
-        self,
-        metadata: Mapping[str, Any],
-        streams: Mapping[str, _Stream],
-    ) -> None:
-        self.metadata = {"start": metadata}
-        self.streams = streams
-
-    def __getitem__(self, name: str) -> _Stream:
-        return self.streams[name]
-
-
-class _Keys(tuple[str, ...]):
-    def last(self) -> str:
-        return self[-1]
-
-
-class _Catalog:
-    def __init__(self, runs: Mapping[str, _Run]) -> None:
-        self.runs = dict(runs)
-
-    def __getitem__(self, uid: Hashable) -> _Run:
-        return self.runs[str(uid)]
-
-    def search(self, query: Any) -> _Catalog:
-        return self
-
-    def keys(self) -> _Keys:
-        return _Keys(self.runs)
-
-
-def _run_from_documents(
-    documents: Sequence[tuple[str, Mapping[str, Any]]], uid: str
-) -> _Run:
-    start = next(
-        doc for name, doc in documents if name == "start" and doc["uid"] == uid
-    )
-    descriptors = {
-        doc["uid"]: doc["name"]
-        for name, doc in documents
-        if name == "descriptor" and doc["run_start"] == uid
-    }
-    events: dict[str, list[Mapping[str, Any]]] = {
-        stream_name: [] for stream_name in descriptors.values()
-    }
-    for name, doc in documents:
-        if name == "event" and doc["descriptor"] in descriptors:
-            events[descriptors[doc["descriptor"]]].append(doc["data"])
-    streams = {
-        stream_name: _Stream(
-            {
-                field: np.asarray([event[field] for event in stream_events])
-                for field in stream_events[0]
-            }
-        )
-        for stream_name, stream_events in events.items()
-        if stream_events
-    }
-    return _Run(start, streams)
+from xpd_tools.optimization.evaluation import XrayUvvisEvaluation
+from xpd_tools.optimization.plans import QualityPolicy, create_xray_uvvis_plan
 
 
 def test_simulated_acquisition_evaluates_external_references(
@@ -104,6 +22,8 @@ def test_simulated_acquisition_evaluates_external_references(
     wavelength: np.ndarray,
     good_spectrum: np.ndarray,
     reference_config_factory: Any,
+    plan_context_factory: Any,
+    tiled_fakes: Any,
 ) -> None:
     absorbance = (
         0.0001 * wavelength
@@ -111,54 +31,30 @@ def test_simulated_acquisition_evaluates_external_references(
         + 0.25 * np.exp(-((wavelength - 365) ** 2) / (2 * 12**2))
     )
     fake_qepro.spectra = [good_spectrum, good_spectrum, absorbance, absorbance]
-
-    class _UnusedXray:
-        @property
-        def name(self) -> str:
-            raise AssertionError("disabled X-ray detector was accessed")
-
-    def unused_wrapper(plan: Any, no_dark: bool):
-        raise AssertionError("disabled X-ray wrapper was called")
-
-    led, uv_shutter, fast_shutter = optical_signals
-    plan = create_xray_uvvis_plan(
-        XrayUvvisPlanContext(
-            fake_qepro,
-            led,
-            uv_shutter,
-            fast_shutter,
-            {"dds2_p1": fake_pumps["dds2_p1"]},
-            _UnusedXray(),
-            unused_wrapper,
+    context = plan_context_factory(
+        quality=QualityPolicy(
+            enabled=True,
+            good_batches=1,
+            max_bad_batches=2,
+            absorbance_shots=2,
+            fluorescence_shots=2,
         )
     )
-    flow = {
-        "precursor_prefix_list": ["CsPb"],
-        "precursor_list": ["CsPbOA"],
-        "syringe_list": [50],
-        "syringe_mater_list": ["steel"],
-        "target_vol_list": ["30 ml"],
-        "set_target_list": [True],
-        "dof_to_pump": {"infusion_rate_CsPb": "dds2_p1"},
-        "post_dilute": False,
-        "mixer_lengths_cm": [0.0],
-        "resident_t_ratio": 0.0,
-    }
+    plan = create_xray_uvvis_plan(context)
     acquisition = RE(
         plan(
-            [{"_id": 7, "infusion_rate_CsPb": 25}],
+            [
+                {
+                    "_id": 7,
+                    "infusion_rate_CsPb": 25,
+                    "infusion_rate_Br": 15,
+                    "infusion_rate_I2": 5,
+                }
+            ],
             [],
             md={
                 "blop_correlation_uid": "correlation-7",
                 "blop_suggestions": [{"_id": 7}],
-            },
-            flow_config=flow,
-            xray_config={"do_xray": False},
-            wash_config={"do_wash": False},
-            quality_config={
-                "use_good_bad": False,
-                "num_abs": 2,
-                "num_flu": 2,
             },
         )
     )
@@ -176,29 +72,37 @@ def test_simulated_acquisition_evaluates_external_references(
         return sandbox_uid
 
     sandbox_uid = cast(Any, RE(sandbox_plan())).plan_result
-    raw_run = _run_from_documents(documents, raw_uid)
-    sandbox_run = _run_from_documents(documents, sandbox_uid)
-    references = PdfReferenceConfig.from_json(
-        reference_config_factory(include_cif=False)
-    )
+    raw_run = tiled_fakes.run_from_documents(documents, raw_uid)
+    sandbox_run = tiled_fakes.run_from_documents(documents, sandbox_uid)
     evaluator = XrayUvvisEvaluation(
-        _Catalog({raw_uid: raw_run}),
-        _Catalog({sandbox_uid: sandbox_run}),
-        DEFAULT_PLQY_PARAMS,
-        references,
-        pdf_fit_config=PdfFitConfig(PdfEvaluationMode.RAW_ONLY),
+        tiled_fakes.Catalog({raw_uid: raw_run}),
+        tiled_fakes.Catalog({sandbox_uid: sandbox_run}),
+        reference_config_factory(include_cif=False),
+        pdf_mode="raw",
         max_retries=1,
         retry_delay=0,
     )
 
     outcome = evaluator(raw_uid, [{"_id": 7}])[0]
 
-    assert raw_uid == raw_run.metadata["start"]["uid"]
-    assert raw_run.metadata["start"]["blop_correlation_uid"] == "correlation-7"
-    assert raw_run.metadata["start"]["quality_config"]["num_flu"] == 2
-    assert raw_run.metadata["start"]["quality_config"]["num_abs"] == 2
+    metadata = raw_run.metadata["start"]
+    assert raw_uid == metadata["uid"]
+    assert metadata["blop_correlation_uid"] == "correlation-7"
+    assert metadata["blop_suggestions"] == [{"_id": 7}]
+    assert metadata["infuse_rates"] == [25.0, 15.0, 5.0]
+    assert metadata["xray_uvvis_config"]["quality"]["fluorescence_shots"] == 2
+    assert metadata["xray_uvvis_config"]["quality"]["absorbance_shots"] == 2
+    assert set(raw_run.streams) >= {
+        "fluorescence",
+        "absorbance",
+        "fluorescence_quality",
+        "scattering",
+    }
+    assert len(raw_run.streams["fluorescence"].data["QEPro_output"].values) == 2
+    assert len(raw_run.streams["absorbance"].data["QEPro_output"].values) == 2
     assert fake_qepro.trigger_count == 4
-    assert fake_pumps["dds2_p1"].status.get() == "Stopped"
+    assert all(pump.status.get() == "Stopped" for pump in fake_pumps.values())
+    led, uv_shutter, fast_shutter = optical_signals
     assert (led.get(), uv_shutter.get(), fast_shutter.get()) == ("Low", "Low", 20)
     assert outcome["_id"] == 7
     assert outcome["peak_distance"] == pytest.approx(0, abs=1e-6)
@@ -210,4 +114,5 @@ def test_simulated_acquisition_evaluates_external_references(
         "corr_Target",
         "_id",
     }
+    assert "pdf_fit_corr_Target" not in outcome
     assert all(np.isfinite(value) for key, value in outcome.items() if key != "_id")

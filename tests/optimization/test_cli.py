@@ -1,27 +1,23 @@
 from __future__ import annotations
 
+import csv
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import pytest
 
 import xpd_tools.optimization.cli as cli
 
 
-class _Context:
+class _Client:
     def __init__(self) -> None:
+        self.context = self
         self.closed = False
 
     def close(self) -> None:
         self.closed = True
-
-
-class _Client:
-    def __init__(self) -> None:
-        self.context = _Context()
 
     def __getitem__(self, key: str) -> _Client:
         assert key == cli.SANDBOX_CATALOG
@@ -44,21 +40,17 @@ class _Evaluator:
         return [{"Peak": 660.0, "_id": suggestions[0]["_id"]}]
 
 
-def test_cli_requires_reference_config() -> None:
-    with pytest.raises(SystemExit) as exc:
+def test_cli_parser_exit_two_errors(reference_config_factory: Any) -> None:
+    with pytest.raises(SystemExit) as missing_reference:
         cli.main(["uid"])
-    assert exc.value.code == 2
+    assert missing_reference.value.code == 2
 
-
-def test_cli_rejects_empty_uid_input(
-    reference_config_factory: Any,
-) -> None:
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(SystemExit) as missing_uid:
         cli.main(["--pdf-references", str(reference_config_factory())])
-    assert exc.value.code == 2
+    assert missing_uid.value.code == 2
 
 
-def test_evaluate_uids_assigns_ids_and_aborts_on_error() -> None:
+def test_evaluate_uids_assigns_internal_ids_and_aborts_on_error() -> None:
     calls: list[str] = []
 
     def evaluator(
@@ -83,6 +75,7 @@ def test_cli_combines_uids_outputs_json_csv_and_closes_clients(
     uid_file = tmp_path / "uids.txt"
     uid_file.write_text("# comment\nsecond # trailing comment\n\n")
     output = tmp_path / "outcomes.csv"
+    reference_path = reference_config_factory()
     clients: list[tuple[str, _Client]] = []
 
     def from_uri(uri: str) -> _Client:
@@ -110,9 +103,9 @@ def test_cli_combines_uids_outputs_json_csv_and_closes_clients(
             "--sandbox-uri",
             "memory://sandbox",
             "--pdf-references",
-            str(reference_config_factory()),
+            str(reference_path),
             "--pdf-mode",
-            "raw_only",
+            "raw",
             "--output",
             str(output),
         ]
@@ -121,47 +114,40 @@ def test_cli_combines_uids_outputs_json_csv_and_closes_clients(
     assert result == 0
     assert [uri for uri, _ in clients] == ["memory://raw", "memory://sandbox"]
     assert all(client.context.closed for _, client in clients)
-    assert _Evaluator.instances[0].calls == [
+    evaluator = _Evaluator.instances[0]
+    assert evaluator.args == (clients[0][1], clients[1][1], str(reference_path))
+    assert evaluator.kwargs == {"pdf_mode": "raw"}
+    assert evaluator.calls == [
         ("first", [{"_id": 0}]),
         ("second", [{"_id": 1}]),
     ]
     assert json.loads(capsys.readouterr().out) == [
-        {"Peak": 660.0, "_id": 0, "uid": "first"},
-        {"Peak": 660.0, "_id": 1, "uid": "second"},
+        {"Peak": 660.0, "uid": "first"},
+        {"Peak": 660.0, "uid": "second"},
     ]
-    frame = pd.read_csv(output)
-    assert frame["uid"].tolist() == ["first", "second"]
+    with output.open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert rows == [
+        {"Peak": "660.0", "uid": "first"},
+        {"Peak": "660.0", "uid": "second"},
+    ]
+    assert output.read_text().splitlines()[0] == "Peak,uid"
 
-
-def test_cli_uses_raw_profile_when_uri_is_absent(
-    reference_config_factory: Any,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
     raw = _Client()
     sandbox = _Client()
     profiles: list[str] = []
     monkeypatch.setattr(
-        cli,
-        "from_profile",
-        lambda profile: profiles.append(profile) or raw,
+        cli, "from_profile", lambda profile: profiles.append(profile) or raw
     )
     monkeypatch.setattr(cli, "from_uri", lambda uri: sandbox)
-    monkeypatch.setattr(cli, "XrayUvvisEvaluation", _Evaluator)
-
-    assert (
-        cli.main(
-            [
-                "uid",
-                "--raw-profile",
-                "local-profile",
-                "--pdf-references",
-                str(reference_config_factory()),
-                "--pdf-mode",
-                "raw_only",
-            ]
-        )
-        == 0
+    cli.main(
+        [
+            "uid",
+            "--raw-profile",
+            "local-profile",
+            "--pdf-references",
+            str(reference_path),
+        ]
     )
     capsys.readouterr()
     assert profiles == ["local-profile"]
