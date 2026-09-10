@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ax.api.protocols import IMetric
 from blop.ax import Objective, OutcomeConstraint, RangeDOF
 from blop.ax.queueserver_agent import QueueserverAgent
 
 from .evaluation import XrayUvvisEvaluation
 
+# TODO: These may change and should be configurable.
 _STANDARD_DOFS: tuple[tuple[str, tuple[float, float]], ...] = (
     ("infusion_rate_CsPb", (10, 200)),
     ("infusion_rate_Br", (5, 200)),
@@ -20,7 +22,7 @@ _STANDARD_DOFS: tuple[tuple[str, tuple[float, float]], ...] = (
 def build_queue_agent(
     evaluation: XrayUvvisEvaluation,
     re_manager_api: Any,
-    document_dispatcher: Any,
+    document_dispatcher: Any,  # WARN: Future release of blop will remove this
     *,
     peak_tolerance: float = 5,
     checkpoint_path: str | Path | None = None,
@@ -31,6 +33,11 @@ def build_queue_agent(
         for name, bounds in _STANDARD_DOFS
     ]
     metric_prefix = "corr_" if evaluation.pdf_mode == "raw" else "pdf_fit_corr_"
+
+    # TODO: Too many competing objectives may be very hard to optimize.
+    # Almost any direction sampled will be a hyper-volume (pareto) improvement.
+    # Should prefer some linear combination of these with pre-defined, configurable
+    # weights.
     objectives = [
         Objective(name="log_FWHM", minimize=True),
         Objective(name="log_PLQY", minimize=False),
@@ -44,7 +51,7 @@ def build_queue_agent(
         ),
     ]
     target = evaluation.peak_target
-    peak = Objective(name="Peak", minimize=False)
+    peak = IMetric(name="Peak")
     agent = QueueserverAgent(
         re_manager_api,
         document_dispatcher,
@@ -61,6 +68,6 @@ def build_queue_agent(
     )
     if evaluation.pdf_mode == "fit":
         agent.ax_client.configure_tracking_metrics(
-            tuple(f"corr_{phase.name}" for phase in evaluation.phases)
+            tuple([f"corr_{phase.name}" for phase in evaluation.phases])
         )
     return agent

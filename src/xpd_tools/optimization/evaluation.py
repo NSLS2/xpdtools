@@ -266,11 +266,13 @@ class XrayUvvisEvaluation:
         pdf_references: str | Path,
         *,
         pdf_mode: Literal["raw", "fit"] = "fit",
-        plqy: PlqyReference = PlqyReference(),  # ruff:ignore[function-call-in-default-argument]
+        plqy: PlqyReference | None = None,
         peak_target: float = 660,
         max_retries: int = 10,
         retry_delay: float = 2.0,
     ) -> None:
+        if plqy is None:
+            plqy = PlqyReference()
         if pdf_mode not in {"raw", "fit"}:
             raise ValueError("pdf_mode must be either 'raw' or 'fit'")
         if max_retries < 1:
@@ -616,6 +618,11 @@ class XrayUvvisEvaluation:
         suggestions: Sequence[Mapping[str, Any]],
     ) -> Sequence[Mapping[str, Any]]:
         """Evaluate a run and return finite outcomes for each suggestion."""
+        if len(suggestions) > 1:
+            raise RuntimeError(
+                f"More than 1 suggestion is not supported, got: {len(suggestions)}"
+            )
+        suggestion = suggestions[0]
         fluorescence, absorbance, _metadata, batch_info = self._read_tiled_data(uid)
         if batch_info is not None:
             fluorescence = self._filter_fl_to_good_batches(
@@ -671,4 +678,4 @@ class XrayUvvisEvaluation:
             "log_PLQY": float(np.log(plqy)),
             **pdf_metrics,
         }
-        return [{**outcomes, "_id": suggestion["_id"]} for suggestion in suggestions]
+        return [{**outcomes, "_id": suggestion["_id"]}]
